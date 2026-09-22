@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -126,7 +127,7 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
         else -> Int.MAX_VALUE.dp
     }
 
-    val content = remember(currentIndex) { WildMock.chapterContent() }
+    val content = remember(currentIndex) { WildMock.chapterContent(flat[currentIndex].second.title) }
     val blocks = remember(content) { parseBlocks(content) }
 
     Scaffold(
@@ -181,12 +182,13 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                     bottom = ReaderSettings.bottomBarHeight.dp,
                 ),
             ) {
-                items(blocks) { block ->
+                itemsIndexed(blocks) { i, block ->
                     when (block) {
                         is ParsedBlock.Text -> Text(
                             block.content,
                             style = TextStyle(
-                                fontSize = ReaderSettings.fontSize.sp,
+                                fontSize = (ReaderSettings.fontSize + if (i == 0) 2f else 0f).sp,
+                                fontWeight = if (i == 0) FontWeight.Bold else null,
                                 lineHeight = ReaderSettings.lineHeight.em,
                                 letterSpacing = 0.5.sp,
                                 color = fg,

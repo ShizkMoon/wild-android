@@ -147,7 +147,7 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
             val canvasWPx = wPx - leftPadPx - rightPadPx
             val canvasHPx = hPx - topBarPx - bottomBarPx
 
-            val content = remember(currentIndex) { WildMock.chapterContent() }
+            val content = remember(currentIndex) { WildMock.chapterContent(flat[currentIndex].second.title) }
             val textStyle = remember(fontSize, lineHeight, fg) {
                 TextStyle(
                     fontSize = fontSize.sp,
@@ -320,7 +320,14 @@ private fun TextPage(
                 .padding(horizontal = with(density) { leftPad.toDp() }),
         ) {
             paragraphs.forEachIndexed { i, p ->
-                Text(p, style = style)
+                val isTitle = pageNum == 1 && i == 0 // 原 App：每章正文首行显示章节标题
+                Text(
+                    p,
+                    style = style.copy(
+                        fontSize = if (isTitle) (style.fontSize.value + 2f).sp else style.fontSize,
+                        fontWeight = if (isTitle) FontWeight.Bold else style.fontWeight,
+                    ),
+                )
                 if (i < paragraphs.lastIndex) {
                     Spacer(Modifier.height(with(density) { spacingPx.toDp() }))
                 }

@@ -171,8 +171,9 @@ object WildMock {
         )),
     )
 
-    /** 模拟章节正文：普通段落 + 一个 `<!--image-->` 插图标记（spec F16 解析约定）。 */
-    fun chapterContent(): String = buildString {
+    /** 模拟章节正文：章节标题行（原 App 每章正文首行显示标题）+ 普通段落 + 一个 `<!--image-->` 插图标记（spec F16 解析约定）。 */
+    fun chapterContent(title: String = ""): String = buildString {
+        if (title.isNotBlank()) append(title).append('\n')
         val paras = listOf(
             "夜色像一层浸了墨的纱，缓缓罩在这座临海的小城上。街灯次第亮起，将石板路染成温润的橘黄。少年抱着刚从旧书店淘来的厚册子，脚步在巷口顿了顿——前方传来的喧闹声里，混着某种不该属于这个时代的金属鸣响。",
             "他原以为那只是错觉。直到那道影子从屋檐下直坠而下，落在他面前三步远的地方，轻巧得没有一丝声响。月光照亮了来者的侧脸：银色的发，湖蓝色的眼，还有耳际那枚流转着微光的吊坠。",

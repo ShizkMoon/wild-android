@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme.colorScheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import app.wild.android.data.prefs.ThemeMode

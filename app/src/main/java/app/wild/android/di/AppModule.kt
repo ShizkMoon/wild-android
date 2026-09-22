@@ -14,6 +14,7 @@ val appModule = module {
     single { get<WildDatabase>().cookieDao() }
     single { get<WildDatabase>().webCacheDao() }
     single { get<WildDatabase>().chapterCacheDao() }
+    single { get<WildDatabase>().imageCacheDao() }
     single { get<WildDatabase>().signLogDao() }
     single { get<WildDatabase>().downloadDao() }
 

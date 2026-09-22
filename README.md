@@ -24,7 +24,7 @@ Wild 轻小说文库的安卓原生复刻 —— Kotlin + Jetpack Compose + Mate
 - JDK 17（Temurin 17.0.20+）
 - Android SDK：`platforms;android-37.2`（或 `platforms;android-36` + 改 compileSdk）、`build-tools;36.0.0`、`platform-tools`
 - `ANDROID_HOME`/`sdk.dir` 指向 SDK（本机：`~/Android/Sdk`；已写 `local.properties`）
-- 网络直连 Maven Central / Google Maven（本机代理 127.0.0.1:7897 若未运行，Gradle 需直连）
+- 需要能访问 Maven Central / Google Maven；若网络只能走代理，把代理写进 `~/.gradle/gradle.properties`（`systemProp.https.proxyHost/Port`），不要写进仓库内的 `gradle.properties`。
 
 ## 构建
 

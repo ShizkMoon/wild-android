@@ -5,10 +5,8 @@
     <string name="nav_bookshelf">书架</string>
     <string name="nav_history">历史</string>
     <string name="nav_more">更多</string>
-    <string name="placeholder_home">首页占位 —— 推荐 / 分类 / 排行 / 完结（Stage 3 复刻）</string>
     <string name="placeholder_bookshelf">书架占位 —— 多分类书架网格（Stage 3 复刻）</string>
     <string name="placeholder_history">阅读历史占位 —— 按「继续阅读」恢复进度</string>
-    <string name="placeholder_more">更多 —— 下载 / 账户 / 设置 / 关于</string>
     <string name="more_download">下载管理</string>
     <string name="more_account">账户</string>
     <string name="more_settings">设置</string>

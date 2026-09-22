@@ -26,6 +26,7 @@ class LibraryRepository(
 
     suspend fun recordSearch(type: String, key: String) {
         searchDao.upsert(SearchHistoryEntity(type, key, System.currentTimeMillis()))
+        searchDao.trimTo(limit = 100)
     }
 
     suspend fun clearHistory() = historyDao.clearAll()

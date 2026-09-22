@@ -23,6 +23,7 @@ abstract class WildDatabase : RoomDatabase() {
     abstract fun cookieDao(): CookieDao
     abstract fun webCacheDao(): WebCacheDao
     abstract fun chapterCacheDao(): ChapterCacheDao
+    abstract fun imageCacheDao(): ImageCacheDao
     abstract fun readingHistoryDao(): ReadingHistoryDao
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun signLogDao(): SignLogDao

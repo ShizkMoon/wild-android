@@ -12,7 +12,7 @@ interface CookieDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(cookie: CookieEntity)
 
-    @Query("SELECT * FROM cookie WHERE domain = :domain")
+    @Query("SELECT * FROM cookie WHERE domain = :domain OR domain LIKE '%' || :domain")
     suspend fun forDomain(domain: String): List<CookieEntity>
 
     @Query("SELECT EXISTS(SELECT 1 FROM cookie WHERE name = 'jieqiUserInfo')")
@@ -43,6 +43,18 @@ interface ChapterCacheDao {
     suspend fun put(entry: ChapterCacheEntity)
 
     @Query("DELETE FROM chapter_cache WHERE cachedAtMs < :beforeMs")
+    suspend fun evictBefore(beforeMs: Long)
+}
+
+@Dao
+interface ImageCacheDao {
+    @Query("SELECT * FROM image_cache WHERE url = :url")
+    suspend fun get(url: String): ImageCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(entry: ImageCacheEntity)
+
+    @Query("DELETE FROM image_cache WHERE cachedAtMs < :beforeMs")
     suspend fun evictBefore(beforeMs: Long)
 }
 
@@ -78,6 +90,13 @@ interface SearchHistoryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: SearchHistoryEntity)
+
+    /** 保留最近 [limit] 条（spec F13：上限 100，无单条删除）。 */
+    @Query(
+        "DELETE FROM search_history WHERE (searchType || '|' || searchKey) NOT IN " +
+            "(SELECT searchType || '|' || searchKey FROM search_history ORDER BY searchedAtMs DESC LIMIT :limit)"
+    )
+    suspend fun trimTo(limit: Int = 100)
 
     @Query("DELETE FROM search_history")
     suspend fun clearAll()

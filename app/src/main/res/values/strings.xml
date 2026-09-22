@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">轻小说文库</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_bookshelf">书架</string>
+    <string name="nav_history">历史</string>
+    <string name="nav_more">更多</string>
+    <string name="placeholder_bookshelf">书架占位 —— 多分类书架网格（Stage 3 复刻）</string>
+    <string name="placeholder_history">阅读历史占位 —— 按「继续阅读」恢复进度</string>
+    <string name="more_download">下载管理</string>
+    <string name="more_account">账户</string>
+    <string name="more_settings">设置</string>
+    <string name="more_about">关于</string>
+    <string name="theme_mode_system">跟随系统</string>
+    <string name="theme_mode_light">浅色</string>
+    <string name="theme_mode_dark">深色</string>
+    <string name="adaptive_hint">自适应演示：窄屏底部导航栏，宽屏导航轨</string>
+</resources>

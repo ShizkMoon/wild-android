@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylised open book: left page, right page, spine -->
+    <group android:scaleX="0.55" android:scaleY="0.55"
+        android:translateX="24.3" android:translateY="24.3">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M54,28 C46,20 32,18 20,20 L20,78 C32,76 46,78 54,86 C62,78 76,76 88,78 L88,20 C76,18 62,20 54,28 Z" />
+        <path
+            android:fillColor="#4A5FA5"
+            android:pathData="M54,28 L54,86 C62,78 76,76 88,78 L88,20 C76,18 62,20 54,28 Z"
+            android:fillAlpha="0.85" />
+    </group>
+</vector>

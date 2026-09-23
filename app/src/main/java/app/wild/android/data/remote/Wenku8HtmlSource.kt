@@ -439,41 +439,50 @@ class Wenku8HtmlSource(
 
     /**
      * parse_novel_info —— 改走 `/book/{aid}.htm`（articleinfo.php 被 CF 拦）。
-     * 结构：`#content > div > table` 第 2 行 = 5 个 `标签：值` td；下一张 table
-     * 第二列 = cover img + `作品Tags：` + `最近章节：` + `内容简介：` 各 span。
+     *
+     * 实测结构（/book/2304.htm）：
+     *  - 首表 tr[0] 是 `colspan=5` 的标题行，**内部还嵌套一张子表**（书名 b +
+     *    「推一下!」+ 右侧「举报/报错」链接）；tr[1] 才是 5 个 `标签：值` td。
+     *    按行序下标取 td 会命中嵌套表的行（作者被取成「[举报/报错]」），
+     *    因此元数据一律按键名前缀在 td 文本里找。
+     *  - 含封面/标签/简介的信息表以「内容简介」span 为判据定位；其布局是
+     *    `标签span → br → 内容span`（或内容 a），值要跨 br 向后找兄弟元素。
      */
     private fun parseNovelInfo(aid: Int, html: String): NovelInfo {
         val doc = Jsoup.parse(html)
         val content = doc.select("#content").first()
             ?: throw Wenku8HttpException(200, "详情页缺少 #content")
-        val firstTable = content.select("table").first()
+        val tables = content.select("table")
+        val firstTable = tables.first()
             ?: throw Wenku8HttpException(200, "详情页缺少 table")
 
         val title = firstTable.select("span b").first()?.text()?.trim()
             ?: firstTable.select("b").first()?.text()?.trim()
             ?: throw Wenku8HttpException(200, "详情页缺少标题")
 
-        // tr[1] 的 5 个 td：文库分类/小说作者/文章状态/最后更新/全文长度
-        val infoTds = firstTable.select("tr").getOrNull(1)?.select("td")
-        fun tdValue(i: Int): String =
-            infoTds?.getOrNull(i)?.text()?.substringAfter('：')?.trim().orEmpty()
-        val library = tdValue(0)
-        val author = tdValue(1)
-        val status = tdValue(2)
-        val finUpdate = tdValue(3)
+        // 元数据 td 键名：文库分类/小说作者/文章状态/最后更新/全文长度。
+        // 嵌套标题表的 td（书名、[举报/报错]）不以这些前缀开头，天然被过滤。
+        fun metaValue(key: String): String =
+            firstTable.select("td").firstOrNull {
+                it.text().trim().startsWith(key)
+            }?.text()?.substringAfter('：')?.trim().orEmpty()
+        val library = metaValue("文库分类：")
+        val author = metaValue("小说作者：")
+        val status = metaValue("文章状态：")
+        val finUpdate = metaValue("最后更新：")
 
-        // 第二张 table：cover + tags + 最近章节 + 简介
+        // 信息表 = 含「内容简介」span 的那张（封面 img + 作品Tags + 最近章节 + 简介）
         var cover = ""
         var tags: List<String> = emptyList()
         var introduceHtml = ""
         var lastChapterTitle = ""
         var lastChapterCid = 0
-        val secondTable = content.select("table").getOrNull(2)
-            ?: content.select("table").getOrNull(1)
-        if (secondTable != null) {
-            cover = secondTable.select("img").first()?.attr("src").orEmpty()
-            val spans = secondTable.select("td").getOrNull(1)?.select("span")
-            spans?.forEach { span ->
+        val infoTable = tables.firstOrNull { t ->
+            t.select("span").any { it.text().startsWith("内容简介") }
+        }
+        if (infoTable != null) {
+            cover = infoTable.select("img").first()?.attr("src").orEmpty()
+            for (span in infoTable.select("span")) {
                 val text = span.text()
                 when {
                     text.startsWith("作品Tags") -> {
@@ -483,7 +492,8 @@ class Wenku8HtmlSource(
                             .filter { it.isNotEmpty() }
                     }
                     text.startsWith("最近章节") -> {
-                        val a = span.nextElementSibling()?.takeIf { it.tagName() == "a" }
+                        val a = span.nextElementSiblings()
+                            .select("a[href*=\"/novel/\"]").first()
                             ?: span.parent()?.select("a[href*=\"/novel/\"]")?.first()
                         if (a != null) {
                             lastChapterTitle = a.text().trim()
@@ -493,7 +503,8 @@ class Wenku8HtmlSource(
                         }
                     }
                     text.startsWith("内容简介") -> {
-                        introduceHtml = span.nextElementSibling()?.html()
+                        introduceHtml = span.nextElementSiblings()
+                            .firstOrNull { it.tagName() == "span" }?.html()
                             ?: span.parent()?.select("span")?.last()?.html().orEmpty()
                     }
                 }

@@ -78,6 +78,8 @@ import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.components.NovelCoverCard
+import app.wild.android.ui.components.adaptiveGridColumns
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.vm.BookshelfViewModel
 import app.wild.android.ui.vm.HistoryViewModel
 import kotlinx.coroutines.launch
@@ -174,7 +176,7 @@ fun BookshelfScreen(
                     .padding(padding),
             ) {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(adaptiveGridColumns()),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -326,11 +328,14 @@ fun HistoryScreen(
                     .fillMaxSize()
                     .padding(padding),
             ) {
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     items(histories) { h ->
                         Card(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .contentColumnWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
                             Column(
@@ -445,35 +450,23 @@ fun MoreScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            ListItem(
-                leadingContent = { Icon(Icons.Outlined.Download, null) },
-                headlineContent = { Text("下载") },
-                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                modifier = Modifier.clickable(onClick = onDownloads),
-            )
-            ListItem(
-                leadingContent = { Icon(Icons.Outlined.Person, null) },
-                headlineContent = { Text("账户") },
-                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                modifier = Modifier.clickable(onClick = onAccount),
-            )
-            ListItem(
-                leadingContent = { Icon(Icons.Outlined.Settings, null) },
-                headlineContent = { Text("设置") },
-                trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
-                modifier = Modifier.clickable(onClick = onSettings),
-            )
-            ListItem(
-                leadingContent = { Icon(Icons.Outlined.Info, null) },
-                headlineContent = { Text("关于") },
-                trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.ChevronRight, null)
-                    }
-                },
-                modifier = Modifier.clickable(onClick = onAbout),
-            )
+            Column(Modifier.contentColumnWidth()) {
+                listOf(
+                    Triple("下载", Icons.Outlined.Download, onDownloads),
+                    Triple("账户", Icons.Outlined.Person, onAccount),
+                    Triple("设置", Icons.Outlined.Settings, onSettings),
+                    Triple("关于", Icons.Outlined.Info, onAbout),
+                ).forEach { (label, icon, action) ->
+                    ListItem(
+                        leadingContent = { Icon(icon, null) },
+                        headlineContent = { Text(label) },
+                        trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
+                        modifier = Modifier.clickable(onClick = action),
+                    )
+                }
+            }
         }
     }
 }

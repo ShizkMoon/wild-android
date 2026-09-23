@@ -65,6 +65,7 @@ import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.vm.DownloadDetailViewModel
 import app.wild.android.ui.vm.DownloadsViewModel
 import kotlinx.coroutines.launch
@@ -132,12 +133,15 @@ fun DownloadsScreen(
         if (downloads.isEmpty()) {
             EmptyBlock("暂无下载内容", Modifier.padding(padding))
         } else {
-            LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 items(downloads) { d ->
                     val st = statusStyle(d.status)
                     Card(
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .contentColumnWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                             .clickable { onOpenDetail(d.aid) },
                     ) {
@@ -150,17 +154,17 @@ fun DownloadsScreen(
                             ) { CoverImage(d.novelName, d.coverUrl) }
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(d.novelName, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(d.author, fontSize = 14.sp, color = Color(0xFF616161))
+                                Text(d.novelName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(d.author, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.AutoMirrored.Outlined.MenuBook, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.AutoMirrored.Outlined.MenuBook, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("${d.doneChapters}/${d.totalChapters} 章节", fontSize = 14.sp, color = Color.Gray)
+                                    Text("${d.doneChapters}/${d.totalChapters} 章节", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(st.icon, null, tint = st.color, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text(st.label, fontSize = 14.sp, color = st.color)
+                                    Text(st.label, style = MaterialTheme.typography.bodyMedium, color = st.color)
                                 }
                             }
                         }
@@ -197,13 +201,6 @@ fun DownloadDetailScreen(
     val st = statusStyle(download?.status ?: 0)
     val doneCids = chapters.filter { it.status == 1 }.map { it.cid }.toSet()
 
-    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val maxWidth = when {
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 720.dp
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 600.dp
-        else -> Int.MAX_VALUE.dp
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -227,8 +224,7 @@ fun DownloadDetailScreen(
             item {
                 Column(
                     modifier = Modifier
-                        .widthIn(max = maxWidth)
-                        .fillMaxWidth()
+                        .contentColumnWidth()
                         .padding(horizontal = 16.dp),
                 ) {
                     Row(Modifier.padding(vertical = 16.dp)) {
@@ -281,8 +277,7 @@ fun DownloadDetailScreen(
                 item {
                     Card(
                         modifier = Modifier
-                            .widthIn(max = maxWidth)
-                            .fillMaxWidth()
+                            .contentColumnWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                     ) {
                         Column(Modifier.padding(16.dp)) {

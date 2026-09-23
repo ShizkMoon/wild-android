@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -47,8 +48,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.data.remote.NovelCover
 import coil3.compose.SubcomposeAsyncImage
 import kotlin.math.abs
@@ -56,6 +60,37 @@ import kotlin.math.abs
 /** 封面网格统一纵横比（spec：207/307 ≈ 0.674；书架页用 0.7）。 */
 const val COVER_ASPECT = 207f / 307f
 const val BOOKSHELF_ASPECT = 0.7f
+
+/**
+ * MD3 大屏可读性规范（m3.material.io/foundations/layout）：正文/表单/列表类内容
+ * 在宽屏下限定最大栏宽，避免长行拉伸。统一三档：
+ * expanded(≥840dp) → 720dp，medium(≥600dp) → 600dp，compact 不限。
+ */
+@Composable
+fun contentColumnMaxWidth(): Dp {
+    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    return when {
+        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 720.dp
+        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 600.dp
+        else -> Dp.Unspecified
+    }
+}
+
+/** 配合 LazyColumn 的 `horizontalAlignment = CenterHorizontally` 使用：限宽并铺满列内宽。 */
+@Composable
+fun Modifier.contentColumnWidth(): Modifier =
+    contentColumnMaxWidth().let { if (it == Dp.Unspecified) fillMaxWidth() else widthIn(max = it).fillMaxWidth() }
+
+/** 封面网格列数随窗口宽度伸缩（列表/网格类页密度规范）：compact 3 / medium 4 / expanded 6。 */
+@Composable
+fun adaptiveGridColumns(): Int {
+    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
+    return when {
+        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 6
+        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 4
+        else -> 3
+    }
+}
 
 /**
  * 封面图：[url] 非空走 Coil（OkHttp 磁盘缓存 + UA/Referer），
@@ -187,7 +222,7 @@ fun ErrorBlock(
                             Icons.Outlined.ErrorOutline,
                             contentDescription = null,
                             modifier = Modifier.size(48.dp),
-                            tint = Color.Gray,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.height(16.dp))
                         Text("$title (下拉刷新)", style = MaterialTheme.typography.titleMedium)
@@ -271,7 +306,7 @@ fun NovelGrid(
 @Composable
 fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(label, modifier = Modifier.width(80.dp), color = Color.Gray)
+        Text(label, modifier = Modifier.width(80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(4.dp))
         Text(
             value.ifEmpty { "未设置" },

@@ -26,6 +26,22 @@ Wild 轻小说文库的安卓原生复刻 —— Kotlin + Jetpack Compose + Mate
 - `ANDROID_HOME`/`sdk.dir` 指向 SDK（本机：`~/Android/Sdk`；已写 `local.properties`）
 - 需要能访问 Maven Central / Google Maven；若网络只能走代理，把代理写进 `~/.gradle/gradle.properties`（`systemProp.https.proxyHost/Port`），不要写进仓库内的 `gradle.properties`。
 
+## 使用说明
+
+- **安装**：用 `app-debug.apk`（见 SZKM-52 交付附件）`adb install` 或侧载安装；包名 `app.wild.android`，应用名「轻小说文库」，minSdk 26。
+- **启动**：首次启动走初始化页 → 未登录落到登录页；登录需 wenku8 账号 + 验证码（验证码可点击刷新）。
+- **深链**：`wild://app/<route>` 可直达各页：`home`、`bookshelf`、`history`、`more`、`novel/{aid}`、`reader/{aid}/{cid}`、`novel/{aid}/reviews`、`novel/{aid}/download-select`、`search?type=&key=`、`category?tag=`、`settings`、`account`、`about`、`downloads`、`download/{aid}`。
+- **已知环境依赖**：wenku8.net 有 Cloudflare 拦截 + `modules/article/*` 要求登录态；匿名态下列表页可能显示「站点防护验证未通过」（实为站点要求登录，见验收报告）。
+
+## 界面实拍（v0.1.0 验收截图）
+
+| 手机 | 平板 | 折叠屏 |
+|---|---|---|
+| ![登录](docs/screenshots/login_captcha.png) | ![导航轨](docs/screenshots/t_home_rail.png) | ![展开](docs/screenshots/f_open_home.png) |
+| ![详情](docs/screenshots/novel_2304.png) | ![阅读器](docs/screenshots/t_reader.png) | ![折叠](docs/screenshots/f_closed_home.png) |
+| ![阅读器](docs/screenshots/reader_p1.png) | | ![阅读连续性](docs/screenshots/f_reopened_reader.png) |
+| ![离线阅读](docs/screenshots/offline_reader.png) | | |
+
 ## 构建
 
 ```bash

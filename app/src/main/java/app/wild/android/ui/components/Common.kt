@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -240,14 +239,6 @@ fun NovelGrid(
     ) {
         items(shown.size) { i ->
             NovelCoverCard(shown[i % shown.size], onClick = { onNovelClick(shown[i % shown.size]) }, aspect = aspect)
-        }
-        item(span = { GridItemSpan(maxLineSpan) }) {
-            Box(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
         }
     }
 }

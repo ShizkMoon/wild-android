@@ -185,6 +185,10 @@ private fun WildNavHost(navController: NavHostController) {
                 onSearchClick = { navController.navigate(WildRoutes.search()) },
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
                 onCategoryClick = { tag -> navController.navigate(WildRoutes.category(tag)) },
+                onReviews = { aid -> navController.navigate(WildRoutes.reviews(aid)) },
+                onDownloadSelect = { aid -> navController.navigate(WildRoutes.downloadSelect(aid)) },
+                onAuthorClick = { author -> navController.navigate(WildRoutes.search("author", author)) },
+                onChapterClick = { aid, cid -> navController.navigate(WildRoutes.reader(aid, cid)) },
             )
         }
         composable(
@@ -199,7 +203,7 @@ private fun WildNavHost(navController: NavHostController) {
         ) {
             HistoryScreen(
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
-                onContinueRead = { h -> navController.navigate(WildRoutes.reader(h.novelId, h.novelId * 1000 + h.progressPage + 1)) },
+                onContinueRead = { h -> navController.navigate(WildRoutes.reader(h.novelId, app.wild.android.data.mock.WildMock.resolveChapterCid(h.novelId, h.chapterTitle))) },
             )
         }
         composable(

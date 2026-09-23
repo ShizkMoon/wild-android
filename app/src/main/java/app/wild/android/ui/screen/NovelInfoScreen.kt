@@ -152,7 +152,7 @@ fun NovelInfoScreen(
                         if (history != null) {
                             ContinueReadButton(
                                 chapterTitle = history.chapterTitle,
-                                onClick = { onChapterClick(aid * 1000 + 1) },
+                                onClick = { onChapterClick(WildMock.resolveChapterCid(aid, history.chapterTitle)) },
                             )
                         }
                         NovelDescription(info)

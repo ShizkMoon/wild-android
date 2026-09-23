@@ -49,14 +49,13 @@ fun paginate(
             } else {
                 val cut = m.offsetAtHeight(freeHeight)
                 if (cut <= 0) {
-                    // 当前页放不下任何字符：换页（防止死循环）
-                    if (buf.isEmpty() && pages.isEmpty()) {
-                        // 极端：整页都容不下一段——仍强行写入保证不丢内容
-                        buf.append(rest); endPage(buf.toString()); buf.clear(); rest = ""
-                    } else if (buf.isNotEmpty()) {
+                    // 当前页放不下任何字符
+                    if (buf.isNotEmpty()) {
+                        // 页内有内容：换页后重试本段
                         endPage(buf.toString()); buf.clear()
                     } else {
-                        freeHeight = canvasHeightPx
+                        // 空页仍放不下：强行写入保证不丢内容、不死循环
+                        buf.append(rest); endPage(buf.toString()); buf.clear(); rest = ""
                     }
                 } else {
                     buf.append(rest.substring(0, cut))

@@ -1,6 +1,8 @@
 package app.wild.android.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -265,7 +267,7 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
  * 历史 tab（spec §2.6）：AppBar「阅读历史」+ 清空钮；列表卡
  * （封面 80×120 + 书名/作者/最后阅读时间 + 「继续阅读」按钮条）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     onNovelClick: (Int) -> Unit,
@@ -314,7 +316,10 @@ fun HistoryScreen(
                         ) {
                             Column(
                                 modifier = Modifier
-                                    .clickable { onNovelClick(h.novelId) }
+                                    .combinedClickable(
+                                        onClick = { onNovelClick(h.novelId) },
+                                        onLongClick = { deleteTarget = h },
+                                    )
                                     .padding(12.dp),
                             ) {
                                 Row {

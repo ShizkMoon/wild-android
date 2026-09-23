@@ -33,6 +33,9 @@ object ReaderSettings {
     var keepOnReading by mutableStateOf(false)
     var keepOnScroll by mutableStateOf(true)
 
+    /** 音量键翻页回调（前台阅读器注册；普通=翻页/翻章，HTML=滚0.8屏/翻章）。MainActivity.dispatchKeyEvent 分发。 */
+    var volumeKeyHandler: ((direction: Int) -> Unit)? = null
+
     /** 重置为默认（spec：只重置主题 + 四边距，不动字号/行高/段距/透明度/背景图）。 */
     fun resetDefaults() {
         themeMode = ReaderThemeMode.AUTO

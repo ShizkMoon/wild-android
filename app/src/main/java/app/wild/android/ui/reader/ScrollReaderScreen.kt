@@ -1,6 +1,7 @@
 package app.wild.android.ui.reader
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -100,6 +102,26 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
     var showSettings by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // 换章回到章首（listState 跨章保留旧滚动位置）
+    LaunchedEffect(currentIndex) { listState.scrollToItem(0) }
+
+    // 音量键滚动（spec F23）：HTML 阅读器 = 滚 0.8 屏；到章边界翻章
+    DisposableEffect(listState) {
+        ReaderSettings.volumeKeyHandler = { dir ->
+            val info = listState.layoutInfo
+            val page = (info.viewportEndOffset - info.viewportStartOffset) * 0.8f
+            scope.launch {
+                listState.scroll { scrollBy(dir * page) }
+                val atStart = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+                val atEnd = last != null && last.index >= listState.layoutInfo.totalItemsCount - 1
+                if (dir > 0 && atEnd && currentIndex < flat.size - 1) currentIndex++
+                if (dir < 0 && atStart && currentIndex > 0) currentIndex--
+            }
+        }
+        onDispose { ReaderSettings.volumeKeyHandler = null }
+    }
 
     // 滚屏时常亮（spec F24，默认开）
     val view = LocalView.current
@@ -169,6 +191,20 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                 .fillMaxSize()
                 .clickable { fullscreen = !fullscreen },
         ) {
+            // 背景图层（spec §2.10 背景图占位）：底图缺席时以文字色渐变模拟纹理，透明度=设置滑杆
+            if (ReaderSettings.backgroundOpacity > 0f) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawRect(
+                        Brush.verticalGradient(
+                            listOf(
+                                fg.copy(alpha = ReaderSettings.backgroundOpacity * 0.5f),
+                                Color.Transparent,
+                                fg.copy(alpha = ReaderSettings.backgroundOpacity * 0.5f),
+                            ),
+                        ),
+                    )
+                }
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier

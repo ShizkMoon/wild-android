@@ -175,6 +175,29 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
 
             val pagerState = rememberPagerState(initialPage = 0) { pages.size }
 
+            // 换章回到第一页（rememberPagerState 跨章保留旧页码会被钳到末页）
+            LaunchedEffect(currentIndex) { pagerState.scrollToPage(0) }
+
+            // 音量键翻页（spec F23）：下=下一页/末页翻下一章，上=上一页/首页翻上一章
+            DisposableEffect(pagerState, pages) {
+                ReaderSettings.volumeKeyHandler = { dir ->
+                    if (dir > 0) {
+                        if (pagerState.currentPage < pages.size - 1) {
+                            scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
+                        } else if (currentIndex < flat.size - 1) {
+                            currentIndex++
+                        }
+                    } else {
+                        if (pagerState.currentPage > 0) {
+                            scope.launch { pagerState.scrollToPage(pagerState.currentPage - 1) }
+                        } else if (currentIndex > 0) {
+                            currentIndex--
+                        }
+                    }
+                }
+                onDispose { ReaderSettings.volumeKeyHandler = null }
+            }
+
             // 点击三区：x<30% 或 y<30% = 上一页；x>70% 或 y>70% = 下一页；其余切控制栏
             Box(
                 modifier = Modifier
@@ -209,6 +232,20 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                         }
                     },
             ) {
+                // 背景图层（spec §2.10 背景图占位）：底图缺席时以文字色渐变模拟纹理，透明度=设置滑杆
+                if (ReaderSettings.backgroundOpacity > 0f) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawRect(
+                            Brush.verticalGradient(
+                                listOf(
+                                    fg.copy(alpha = ReaderSettings.backgroundOpacity * 0.5f),
+                                    Color.Transparent,
+                                    fg.copy(alpha = ReaderSettings.backgroundOpacity * 0.5f),
+                                ),
+                            ),
+                        )
+                    }
+                }
                 // 宽屏：阅读列宽受限居中
                 Box(
                     modifier = Modifier

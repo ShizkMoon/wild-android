@@ -184,12 +184,12 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
             }
             // 3. 段落间距：普通 2/17/32 三档；HTML 16-32 步2
             if (html) {
-                SliderRow("段落间距", ReaderSettings.paragraphSpacing, 16f..32f, 8, { "${it.toInt()}" }) {
+                SliderRow("段落间距", ReaderSettings.paragraphSpacing, 16f..32f, 7, { "${it.toInt()}" }) {
                     ReaderSettings.paragraphSpacing = it
                 }
             } else {
                 SliderRow(
-                    "段落间距", ReaderSettings.paragraphSpacing, 2f..32f, 2,
+                    "段落间距", ReaderSettings.paragraphSpacing, 2f..32f, 1,
                     { "${it.toInt()}" },
                 ) { ReaderSettings.paragraphSpacing = it }
             }

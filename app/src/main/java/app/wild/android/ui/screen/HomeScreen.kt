@@ -73,6 +73,10 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     onNovelClick: (Int) -> Unit,
     onCategoryClick: (String) -> Unit,
+    onReviews: (Int) -> Unit = {},
+    onDownloadSelect: (Int) -> Unit = {},
+    onAuthorClick: (String) -> Unit = {},
+    onChapterClick: (Int, Int) -> Unit = { _, _ -> },
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
@@ -139,12 +143,12 @@ fun HomeScreen(
                             NovelInfoScreen(
                                 aid = aid,
                                 showBackButton = false,
-                                onBack = {},
-                                onReviews = {},
-                                onDownload = {},
-                                onAuthorClick = {},
-                                onTagClick = {},
-                                onChapterClick = {},
+                                onBack = { scope.launch { navigator.navigateBack() } },
+                                onReviews = { onReviews(aid) },
+                                onDownload = { onDownloadSelect(aid) },
+                                onAuthorClick = onAuthorClick,
+                                onTagClick = onCategoryClick,
+                                onChapterClick = { cid -> onChapterClick(aid, cid) },
                             )
                         }
                     }

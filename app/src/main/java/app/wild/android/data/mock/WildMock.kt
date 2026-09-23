@@ -210,7 +210,12 @@ object WildMock {
     fun search(type: String, key: String): List<MockNovel> {
         if (key.isBlank()) return emptyList()
         val byAuthor = type == "author"
-        val matched = novels.filter { if (byAuthor) it.author.contains(key) else it.title.contains(key) }
-        return if (matched.isEmpty()) novels.take(6) else matched
+        return novels.filter { if (byAuthor) it.author.contains(key) else it.title.contains(key) }
     }
+
+    /** 「继续阅读」目标章：按历史记录的章名在该书章节里定位，定位不到回退第一章。 */
+    fun resolveChapterCid(aid: Int, chapterTitle: String): Int =
+        volumes(aid).flatMap { it.chapters }
+            .firstOrNull { it.title == chapterTitle }?.cid
+            ?: (aid * 1000 + 1)
 }

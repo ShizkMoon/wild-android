@@ -14,7 +14,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.window.core.layout.WindowSizeClass
+import app.wild.android.ui.components.adaptiveGridColumns
 import app.wild.android.ui.vm.HomeViewModel
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -31,12 +31,7 @@ fun CategoryScreen(
     onNovelClick: (Int) -> Unit,
     vm: HomeViewModel = koinViewModel(),
 ) {
-    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val columns = when {
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 6
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 4
-        else -> 3
-    }
+    val columns = adaptiveGridColumns()
     Scaffold(
         topBar = {
             if (showAppBar) {

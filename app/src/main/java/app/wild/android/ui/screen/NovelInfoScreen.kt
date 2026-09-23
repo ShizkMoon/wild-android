@@ -59,6 +59,8 @@ import app.wild.android.data.remote.NovelInfo
 import app.wild.android.data.remote.Volume
 import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.contentColumnMaxWidth
+import app.wild.android.ui.vm.NovelDetailState
 import app.wild.android.ui.vm.NovelInfoViewModel
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
@@ -67,8 +69,12 @@ import org.koin.core.parameter.parametersOf
 /**
  * 小说详情 `/novel/info`（spec §2.7）：
  * AppBar「小说详情」+ [下载钮, 书架书签钮]；头图区 120×160 + 标题/作者(可点)/状态/动画化；
- * 统计行 spaceEvenly（更新/评论）；标签 chips；「继续阅读」通栏钮；简介 + 卷-章 Card。
- * 宽屏限定内容栏宽并居中（MD3 大屏可读性规范）。
+ * 统计行 spaceEvenly（更新/评论）；标签 chips；「继续阅读」通栏钮（仅存在阅读历史时显示）；
+ * 简介 + 卷-章 Card。
+ * 宽屏形态（MD3 canonical detail / 大屏可读性规范）：
+ * - medium：内容限 600dp 居中；
+ * - expanded 且非双栏详情窗格：左右两栏（左=书籍信息卡，右=卷章目录）+ 内容限宽居中；
+ * - 由首页 ListDetailPaneScaffold 嵌入时（[inDetailPane]）保持单栏限宽，由窗格自身约束宽度。
  * Stage 4：info/toc 走 `/book/{aid}.htm` + `index.htm`；书签 = 本地标记 + 远程加/删。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +88,7 @@ fun NovelInfoScreen(
     onTagClick: (String) -> Unit,
     onChapterClick: (Int) -> Unit,
     showBackButton: Boolean = true,
+    inDetailPane: Boolean = false,
     vm: NovelInfoViewModel = koinViewModel(parameters = { parametersOf(aid) }),
 ) {
     val state by vm.state.collectAsState()
@@ -132,56 +139,102 @@ fun NovelInfoScreen(
             else -> {
                 val info = state.info!!
                 val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-                val maxWidth = when {
-                    sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 720.dp
-                    sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 600.dp
-                    else -> Int.MAX_VALUE.dp
-                }
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    item {
-                        Column(modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth()) {
-                            NovelHeader(info, onAuthorClick)
-                            StatRow(info, onReviews)
-                            TagWrap(info, onTagClick)
-                            val history = state.history
-                            if (history != null || info.lastChapterCid > 0) {
-                                ContinueReadButton(
-                                    chapterTitle = history?.chapterTitle ?: info.lastChapterTitle,
-                                    onClick = { onChapterClick(vm.continueCid()) },
-                                )
+                val maxWidth = contentColumnMaxWidth()
+                val twoColumn = !inDetailPane &&
+                    sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND)
+                if (twoColumn) {
+                    // expanded：信息区 + 目录区双栏（MD3 大屏 detail 布局），两栏各自滚动
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        LazyColumn(
+                            modifier = Modifier
+                                .widthIn(max = 420.dp)
+                                .weight(1f),
+                        ) {
+                            item { DetailHeader(info, state, onAuthorClick, onReviews, onTagClick, onChapterClick, vm) }
+                            item { Spacer(Modifier.height(24.dp)) }
+                        }
+                        LazyColumn(
+                            modifier = Modifier
+                                .widthIn(max = 560.dp)
+                                .weight(1.2f),
+                        ) {
+                            state.volumes.forEach { volume ->
+                                item {
+                                    VolumeCard(volume, onChapterClick)
+                                }
                             }
-                            state.error?.let {
-                                Text(
-                                    "目录加载失败：$it",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                                )
-                            }
-                            NovelDescription(info)
+                            item { Spacer(Modifier.height(24.dp)) }
                         }
                     }
-                    state.volumes.forEach { volume ->
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         item {
-                            Box(
-                                modifier = Modifier
-                                    .widthIn(max = maxWidth)
-                                    .fillMaxWidth(),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                VolumeCard(volume, onChapterClick)
+                            Column(modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth()) {
+                                DetailHeader(info, state, onAuthorClick, onReviews, onTagClick, onChapterClick, vm)
                             }
                         }
+                        state.volumes.forEach { volume ->
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = maxWidth)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    VolumeCard(volume, onChapterClick)
+                                }
+                            }
+                        }
+                        item { Spacer(Modifier.height(24.dp)) }
                     }
-                    item { Spacer(Modifier.height(24.dp)) }
                 }
             }
         }
+    }
+}
+
+/** 详情页信息区：头图 + 统计行 + 标签 + 继续阅读 + 简介（目录错误提示一并归此）。 */
+@Composable
+private fun DetailHeader(
+    info: NovelInfo,
+    state: NovelDetailState,
+    onAuthorClick: (String) -> Unit,
+    onReviews: () -> Unit,
+    onTagClick: (String) -> Unit,
+    onChapterClick: (Int) -> Unit,
+    vm: NovelInfoViewModel,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        NovelHeader(info, onAuthorClick)
+        StatRow(info, onReviews)
+        TagWrap(info, onTagClick)
+        // 「继续阅读」只在确有阅读历史时出现（修验收中 #2 幽灵钮：无历史不再按最新章显示）
+        val history = state.history
+        if (history != null) {
+            ContinueReadButton(
+                chapterTitle = history.chapterTitle,
+                onClick = { onChapterClick(vm.continueCid()) },
+            )
+        }
+        state.error?.let {
+            Text(
+                "目录加载失败：$it",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        NovelDescription(info)
     }
 }
 

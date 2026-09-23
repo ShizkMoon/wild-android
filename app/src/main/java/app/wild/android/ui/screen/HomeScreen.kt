@@ -62,6 +62,7 @@ import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.components.NovelGrid
+import app.wild.android.ui.components.adaptiveGridColumns
 import app.wild.android.ui.vm.HomeViewModel
 import app.wild.android.ui.vm.Paged
 import app.wild.android.data.remote.NovelCover
@@ -160,6 +161,7 @@ fun HomeScreen(
                             NovelInfoScreen(
                                 aid = aid,
                                 showBackButton = false,
+                                inDetailPane = true,
                                 onBack = { scope.launch { navigator.navigateBack() } },
                                 onReviews = { onReviews(aid) },
                                 onDownload = { onDownloadSelect(aid) },
@@ -186,12 +188,7 @@ private fun HomeTabContent(
     onNovelClick: (Int) -> Unit,
     onCategoryClick: (String) -> Unit,
 ) {
-    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val columns = when {
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 6
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 4
-        else -> 3
-    }
+    val columns = adaptiveGridColumns()
     when (tab) {
         0 -> RecommendTab(vm, onNovelClick, columns)
         1 -> CategoryTab(vm, onNovelClick, onCategoryClick, columns)
@@ -289,7 +286,7 @@ internal fun CategoryTab(
     vm: HomeViewModel,
     onNovelClick: (Int) -> Unit,
     onCategoryClick: (String) -> Unit,
-    columns: Int,
+    columns: Int = adaptiveGridColumns(),
     initialTag: String? = null,
 ) {
     var viewMode by rememberSaveable { mutableIntStateOf(0) }

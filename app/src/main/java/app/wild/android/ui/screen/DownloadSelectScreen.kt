@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.vm.DownloadSelectViewModel
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
@@ -128,11 +129,12 @@ fun DownloadSelectScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 item {
                     Card(
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .contentColumnWidth()
                             .padding(16.dp),
                     ) {
                         Row(Modifier.padding(16.dp)) {
@@ -160,7 +162,7 @@ fun DownloadSelectScreen(
                     item {
                         Card(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .contentColumnWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
                             Column(Modifier.padding(vertical = 8.dp)) {

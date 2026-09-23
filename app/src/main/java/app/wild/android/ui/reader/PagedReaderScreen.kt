@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -143,7 +144,9 @@ fun PagedReaderScreen(
             val lineHeight = ReaderSettings.lineHeight
 
             val canvasWPx = wPx - leftPadPx - rightPadPx
-            val canvasHPx = hPx - topBarPx - bottomBarPx
+            // 页码行高预留：n/m 计数器(10sp) + 上下间距，避免满页文字把它挤出屏幕（验收低 #10）
+            val counterPx = with(density) { (10.sp.toPx() * 1.6f) + 12.dp.toPx() }
+            val canvasHPx = hPx - topBarPx - bottomBarPx - counterPx
 
             val content = st.content ?: ""
             val textStyle = remember(fontSize, lineHeight, fg) {
@@ -331,7 +334,7 @@ fun PagedReaderScreen(
                     Text(
                         flat.getOrNull(currentIndex)?.second?.title ?: st.novelName,
                         color = Color.White,
-                        fontSize = 18.sp,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -401,7 +404,7 @@ private fun TextPage(
             }
         }
         Spacer(Modifier.weight(1f))
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
             Text("$pageNum/$pageCount", fontSize = 10.sp, color = style.color, modifier = Modifier.alpha(0.3f))
         }
         Spacer(Modifier.height(with(density) { bottomPad.toDp() }))
@@ -438,7 +441,7 @@ private fun ImagePage(
                 error = { MockIllustration(seed = imageUrl) },
             )
         }
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
             Text("$pageNum/$pageCount", fontSize = 10.sp, color = fg, modifier = Modifier.alpha(0.3f))
         }
         Spacer(Modifier.height(with(density) { bottomPad.toDp() }))

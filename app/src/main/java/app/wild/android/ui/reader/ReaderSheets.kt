@@ -83,7 +83,7 @@ fun ChapterCatalogSheet(
             ) {
                 Icon(Icons.AutoMirrored.Outlined.MenuBook, null)
                 Spacer(Modifier.width(8.dp))
-                Text("目录", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("目录", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 TextButton(onClick = onDismiss) {
                     Icon(Icons.Outlined.Close, null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
@@ -110,7 +110,7 @@ fun ChapterCatalogSheet(
                     item(key = "v-${volume.name}") {
                         Text(
                             volume.name,
-                            fontSize = 16.sp,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(16.dp),
                         )
@@ -159,7 +159,7 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
         ) {
-            Text("设置", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+            Text("设置", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp))
 
             // 1. 阅读器类型
             SettingsLabel("阅读器类型")
@@ -254,12 +254,12 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
                 OutlinedButton(onClick = {}, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Outlined.AddPhotoAlternate, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("设置浅色背景", fontSize = 12.sp)
+                    Text("设置浅色背景", style = MaterialTheme.typography.labelMedium)
                 }
                 OutlinedButton(onClick = {}, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Outlined.AddPhotoAlternate, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("设置深色背景", fontSize = 12.sp)
+                    Text("设置深色背景", style = MaterialTheme.typography.labelMedium)
                 }
             }
 
@@ -289,7 +289,11 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
 
 @Composable
 private fun SettingsLabel(text: String) {
-    Text(text, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 8.dp))
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(vertical = 8.dp),
+    )
 }
 
 @Composable
@@ -305,7 +309,11 @@ private fun SliderRow(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("$label: ${display(value)}", modifier = Modifier.width(110.dp), fontSize = 14.sp)
+        Text(
+            "$label: ${display(value)}",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.width(110.dp),
+        )
         Slider(
             value = value,
             onValueChange = onChange,
@@ -329,17 +337,17 @@ private fun ThemeColorRow(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
         OutlinedButton(onClick = { pickTarget = onBg }) {
             Box(Modifier.size(16.dp).clip(CircleShape).background(bg))
             Spacer(Modifier.width(4.dp))
-            Text("背景颜色", fontSize = 12.sp)
+            Text("背景颜色", style = MaterialTheme.typography.labelMedium)
         }
         Spacer(Modifier.width(8.dp))
         OutlinedButton(onClick = { pickTarget = onFg }) {
             Box(Modifier.size(16.dp).clip(CircleShape).background(fg))
             Spacer(Modifier.width(4.dp))
-            Text("文字颜色", fontSize = 12.sp)
+            Text("文字颜色", style = MaterialTheme.typography.labelMedium)
         }
     }
     pickTarget?.let { apply ->

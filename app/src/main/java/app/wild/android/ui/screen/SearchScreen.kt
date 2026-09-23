@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
@@ -46,6 +47,8 @@ import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.components.NovelGrid
+import app.wild.android.ui.components.adaptiveGridColumns
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.vm.SearchViewModel
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -77,12 +80,7 @@ fun SearchScreen(
         }
     }
 
-    val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-    val columns = when {
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 6
-        sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 4
-        else -> 3
-    }
+    val columns = adaptiveGridColumns()
 
     Scaffold(
         topBar = {
@@ -107,7 +105,7 @@ fun SearchScreen(
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding), horizontalAlignment = Alignment.CenterHorizontally) {
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
@@ -123,35 +121,42 @@ fun SearchScreen(
                     }
                 }),
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .contentColumnWidth()
                     .padding(16.dp),
             )
             when {
                 // 1. 输入为空且有历史 → 历史列表
                 !submitted && input.isBlank() && histories.isNotEmpty() -> {
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         items(histories) { h ->
                             val isName = h.searchType == "articlename"
+                            val accent = if (isName) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
                             ListItem(
                                 leadingContent = {
                                     Icon(
                                         if (isName) Icons.Filled.Book else Icons.Filled.Person,
                                         contentDescription = null,
-                                        tint = if (isName) Color(0xFF2196F3) else Color(0xFF4CAF50),
+                                        tint = accent,
                                     )
                                 },
                                 headlineContent = {
-                                    Text(h.searchKey, color = if (isName) Color(0xFF2196F3) else Color(0xFF4CAF50))
+                                    Text(h.searchKey, color = accent)
                                 },
                                 supportingContent = {
-                                    Text(if (isName) "书名搜索" else "作者搜索", fontSize = 12.sp)
+                                    Text(if (isName) "书名搜索" else "作者搜索", style = MaterialTheme.typography.bodySmall)
                                 },
-                                modifier = Modifier.clickable {
-                                    input = h.searchKey
-                                    searchType = h.searchType
-                                    submitted = true
-                                    vm.search(h.searchType, h.searchKey)
-                                },
+                                modifier = Modifier
+                                    .contentColumnWidth()
+                                    .clickable {
+                                        input = h.searchKey
+                                        searchType = h.searchType
+                                        submitted = true
+                                        vm.search(h.searchType, h.searchKey)
+                                    },
                             )
                         }
                     }

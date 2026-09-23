@@ -41,6 +41,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.vm.ReviewsViewModel
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
@@ -104,11 +105,12 @@ fun ReviewsScreen(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     itemsIndexed(paged.items) { _, r ->
                         Card(
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .contentColumnWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
                             Column(Modifier.padding(16.dp)) {
@@ -136,7 +138,7 @@ fun ReviewsScreen(
                     if (!paged.endReached) {
                         item {
                             Box(
-                                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                modifier = Modifier.contentColumnWidth().padding(16.dp),
                                 contentAlignment = Alignment.Center,
                             ) { CircularProgressIndicator() }
                         }

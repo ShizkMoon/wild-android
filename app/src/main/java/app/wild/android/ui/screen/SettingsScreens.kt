@@ -67,6 +67,7 @@ import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.InfoRow
 import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.components.contentColumnWidth
 import app.wild.android.ui.reader.ReaderSettings
 import app.wild.android.ui.reader.ReaderType
 import app.wild.android.ui.vm.AccountViewModel
@@ -114,6 +115,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             item { Spacer(Modifier.height(8.dp)) }
 
@@ -239,7 +241,7 @@ fun SettingsScreen(
             item {
                 Card(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .contentColumnWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     ListItem(
@@ -296,7 +298,7 @@ fun SettingsScreen(
 private fun SettingsCard(title: String, content: @Composable () -> Unit) {
     Card(
         modifier = Modifier
-            .fillMaxWidth()
+            .contentColumnWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Column {
@@ -367,10 +369,11 @@ fun AccountScreen(
                     .fillMaxSize()
                     .padding(padding),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 // 签到卡
                 item {
-                    Card(Modifier.fillMaxWidth()) {
+                    Card(Modifier.contentColumnWidth()) {
                         ListItem(
                             leadingContent = { Icon(Icons.Outlined.Book, null) },
                             headlineContent = { Text("每日签到") },
@@ -390,7 +393,7 @@ fun AccountScreen(
                 }
                 sections.forEach { (section, rows) ->
                     item {
-                        Card(Modifier.fillMaxWidth()) {
+                        Card(Modifier.contentColumnWidth()) {
                             Column(Modifier.padding(16.dp)) {
                                 Text(section, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.height(12.dp))
@@ -473,7 +476,7 @@ fun AboutScreen(onBack: () -> Unit) {
                     Text("检查更新")
                 }
                 Spacer(Modifier.height(32.dp))
-                Card(Modifier.fillMaxWidth()) {
+                Card(Modifier.contentColumnWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("关于 Wild", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,34 +53,49 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.wild.android.R
-import app.wild.android.data.mock.WildMock
 import app.wild.android.data.prefs.SettingsStore
 import app.wild.android.data.prefs.ThemeMode
+import app.wild.android.data.remote.Wenku8Client
+import app.wild.android.data.repository.LibraryRepository
+import app.wild.android.data.repository.SessionRepository
+import app.wild.android.ui.components.EmptyBlock
+import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.InfoRow
+import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.reader.ReaderSettings
 import app.wild.android.ui.reader.ReaderType
+import app.wild.android.ui.vm.AccountViewModel
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * 设置页（spec §2.16）：5 张 Card = 阅读器设置 / 主题设置(3 Radio) / API Host
  * / 缓存设置 / 退出登录(红字)。
+ * Stage 4：清缓存 = OkHttp 磁盘缓存 + web_cache + chapter_cache + image_cache；
+ * 退出 = 清 cookie 回登录页。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit, settingsStore: SettingsStore = koinInject()) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onLogout: () -> Unit,
+    settingsStore: SettingsStore = koinInject(),
+    client: Wenku8Client = koinInject(),
+    library: LibraryRepository = koinInject(),
+    session: SessionRepository = koinInject(),
+) {
     val themeMode by settingsStore.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
     val apiHost by settingsStore.apiHost.collectAsState(initial = "")
     var apiHostInput by rememberSaveable(apiHost) { mutableStateOf(apiHost) }
     var showClearCacheDialog by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var clearing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
@@ -210,8 +227,10 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit, settingsStore: Sett
                     ListItem(
                         leadingContent = { Icon(Icons.Outlined.CleaningServices, null) },
                         headlineContent = { Text("清除接口缓存") },
-                        supportingContent = { Text("清除所有网络请求的缓存数据") },
-                        modifier = Modifier.clickable { showClearCacheDialog = true },
+                        supportingContent = {
+                            Text(if (clearing) "清除中…" else "清除所有网络请求与章节的缓存数据")
+                        },
+                        modifier = Modifier.clickable(enabled = !clearing) { showClearCacheDialog = true },
                     )
                 }
             }
@@ -242,7 +261,13 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit, settingsStore: Sett
             confirmButton = {
                 TextButton(onClick = {
                     showClearCacheDialog = false
-                    scope.launch { snackbar.showSnackbar("缓存已清除") }
+                    clearing = true
+                    scope.launch {
+                        client.evictHttpCache()
+                        library.clearCaches()
+                        clearing = false
+                        snackbar.showSnackbar("缓存已清除")
+                    }
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { showClearCacheDialog = false }) { Text("取消") } },
@@ -256,7 +281,10 @@ fun SettingsScreen(onBack: () -> Unit, onLogout: () -> Unit, settingsStore: Sett
             confirmButton = {
                 TextButton(onClick = {
                     showLogoutDialog = false
-                    onLogout()
+                    scope.launch {
+                        session.signOut()
+                        onLogout()
+                    }
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { showLogoutDialog = false }) { Text("取消") } },
@@ -294,11 +322,30 @@ private fun SettingsSwitch(label: String, checked: Boolean, onChange: (Boolean) 
 
 /**
  * 账户页（spec §2.16）：4 section Card（基本信息/联系方式/账户信息/个人签名），
- * 行 = 80dp 灰标签 + 值。
+ * 行 = 80dp 灰标签 + 值。Stage 4：`userdetail.php` 键值对驱动（站点字段直接映射为分区），
+ * 顶部加签到卡（一天一次，sign_log 判重）；未登录给明确态。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountScreen(onBack: () -> Unit) {
+fun AccountScreen(
+    onBack: () -> Unit,
+    vm: AccountViewModel = koinViewModel(),
+) {
+    val detail by vm.detail.collectAsState()
+    val loggedIn by vm.loggedIn.collectAsState()
+    val signedToday by vm.signedToday.collectAsState()
+    val signResult by vm.signResult.collectAsState()
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) { vm.load() }
+    LaunchedEffect(signResult) {
+        signResult?.let { snackbar.showSnackbar(it) }
+    }
+
+    // 站点键值 → 分区（保持原 App 的分组观感：按 key 归类）
+    val sections = remember(detail.data) { groupUserDetail(detail.data.orEmpty()) }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -308,28 +355,72 @@ fun AccountScreen(onBack: () -> Unit) {
                 },
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        ) {
-            WildMock.accountSections.forEach { (section, rows) ->
+        when {
+            !loggedIn -> EmptyBlock("未登录", Modifier.padding(padding))
+            detail.loading -> LoadingBlock(Modifier.padding(padding))
+            detail.error != null && detail.data == null ->
+                ErrorBlock(detail.error!!, onRefresh = { vm.load() })
+            else -> LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+            ) {
+                // 签到卡
                 item {
                     Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(section, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(12.dp))
-                            rows.forEach { (label, value) -> InfoRow(label, value) }
-                        }
+                        ListItem(
+                            leadingContent = { Icon(Icons.Outlined.Book, null) },
+                            headlineContent = { Text("每日签到") },
+                            supportingContent = {
+                                Text(if (signedToday) "今天已签到" else "每天可签到一次")
+                            },
+                            trailingContent = {
+                                OutlinedButton(
+                                    onClick = { vm.sign() },
+                                    enabled = !signedToday,
+                                ) { Text(if (signedToday) "已签" else "签到") }
+                            },
+                            modifier = Modifier.clickable(enabled = !signedToday) { vm.sign() },
+                        )
                     }
                     Spacer(Modifier.height(16.dp))
                 }
+                sections.forEach { (section, rows) ->
+                    item {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text(section, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(12.dp))
+                                rows.forEach { (label, value) -> InfoRow(label, value) }
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                    }
+                }
+                item { Spacer(Modifier.height(24.dp)) }
             }
-            item { Spacer(Modifier.height(24.dp)) }
         }
     }
+}
+
+/** userdetail 键值 → 分区（键名做归类，未匹配的全进「账户信息」）。 */
+private fun groupUserDetail(map: Map<String, String>): List<Pair<String, List<Pair<String, String>>>> {
+    if (map.isEmpty()) return emptyList()
+    val buckets = linkedMapOf<String, MutableList<Pair<String, String>>>()
+    fun bucketOf(key: String): String = when {
+        key.contains("邮箱") || key.contains("Email", true) || key.contains("QQ", true) ||
+            key.contains("MSN", true) || key.contains("网站") || key.contains("联系") -> "联系方式"
+        key.contains("签名") || key.contains("描述") -> "个人签名"
+        key.contains("用户名") || key.contains("昵称") || key.contains("ID", true) ||
+            key.contains("等级") || key.contains("头衔") || key.contains("性别") -> "基本信息"
+        else -> "账户信息"
+    }
+    map.forEach { (k, v) -> buckets.getOrPut(bucketOf(k)) { mutableListOf() }.add(k to v) }
+    val order = listOf("基本信息", "联系方式", "账户信息", "个人签名")
+    return order.mapNotNull { name -> buckets[name]?.let { name to it.toList() } }
 }
 
 /**
@@ -375,7 +466,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(32.dp))
                 OutlinedButton(onClick = {
-                    scope.launch { snackbar.showSnackbar("已是最新版本（mock）") }
+                    scope.launch { snackbar.showSnackbar("已是最新版本") }
                 }) {
                     Icon(Icons.Outlined.SystemUpdate, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
@@ -408,7 +499,6 @@ fun AboutScreen(onBack: () -> Unit) {
 @Composable
 private fun SettingsPreview() {
     app.wild.android.ui.theme.WildTheme {
-        // 预览不注入 Koin：直接渲染设置项静态态
-        Text("设置预览见真机截图")
+        Text("预览需要 Koin 环境，见真机截图")
     }
 }

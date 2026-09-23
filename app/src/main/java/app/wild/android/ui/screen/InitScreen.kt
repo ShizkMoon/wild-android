@@ -11,6 +11,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -24,19 +26,31 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.wild.android.R
+import app.wild.android.ui.vm.SessionViewModel
 import kotlinx.coroutines.delay
 import kotlin.math.min
+import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * 启动页 `/init`（spec §2.1）：全屏启动图（正方形裁切、底部 5% 渐隐）
- * + 底部 48dp 主色进度圈；无 AppBar。Stage 3 走桩：固定时长后进主界面。
+ * + 底部 48dp 主色进度圈；无 AppBar。
+ * Stage 4：initSession（种 cookie/检测 CF）+ 登录态分流 —— 已登录进主页，否则去登录页。
  */
 @Composable
-fun InitScreen(onFinished: () -> Unit) {
-    LaunchedEffect(Unit) {
-        delay(1200)
-        onFinished()
+fun InitScreen(
+    onFinished: () -> Unit,
+    onNeedLogin: () -> Unit = onFinished,
+    vm: SessionViewModel = koinViewModel(),
+) {
+    val done by vm.initDone.collectAsState()
+
+    LaunchedEffect(Unit) { vm.init() }
+    LaunchedEffect(done) {
+        val d = done ?: return@LaunchedEffect
+        delay(400) // 保证启动图至少可见一瞬
+        if (d) onFinished() else onNeedLogin()
     }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
             painter = painterResource(R.drawable.wild_startup),
@@ -71,5 +85,5 @@ fun InitScreen(onFinished: () -> Unit) {
 @Preview(showBackground = true)
 @Composable
 private fun InitScreenPreview() {
-    app.wild.android.ui.theme.WildTheme { InitScreen {} }
+    app.wild.android.ui.theme.WildTheme { InitScreen({}) }
 }

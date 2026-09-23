@@ -15,8 +15,10 @@ import androidx.room.RoomDatabase
         SearchHistoryEntity::class,
         SignLogEntity::class,
         NovelDownloadEntity::class,
+        DownloadChapterEntity::class,
+        BookshelfLocalEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class WildDatabase : RoomDatabase() {
@@ -28,9 +30,12 @@ abstract class WildDatabase : RoomDatabase() {
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun signLogDao(): SignLogDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun bookshelfLocalDao(): BookshelfLocalDao
 
     companion object {
         fun build(context: Context): WildDatabase =
-            Room.databaseBuilder(context, WildDatabase::class.java, "wild.db").build()
+            Room.databaseBuilder(context, WildDatabase::class.java, "wild.db")
+                .fallbackToDestructiveMigration(dropAllTables = true)
+                .build()
     }
 }

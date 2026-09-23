@@ -10,22 +10,29 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.lifecycle.lifecycleScope
 import app.wild.android.data.prefs.ThemeMode
 import app.wild.android.data.prefs.SettingsStore
+import app.wild.android.data.remote.CfBypass
 import app.wild.android.ui.navigation.WildNavShell
 import app.wild.android.ui.reader.ReaderSettings
 import app.wild.android.ui.theme.WildTheme
+import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
 
     private val settingsStore: SettingsStore by inject()
+    private val cfBypass: CfBypass by inject()
     private var latestIntent = mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         latestIntent.value = intent
         enableEdgeToEdge()
+        // CF 绕过 WebView（1px 隐藏）+ 阅读器设置持久化装载
+        cfBypass.attach(this)
+        lifecycleScope.launch { ReaderSettings.attach(settingsStore) }
         setContent {
             val themeMode by settingsStore.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
             WildTheme(
@@ -38,6 +45,11 @@ class MainActivity : ComponentActivity() {
                 WildNavShell(intent = latestIntent.value)
             }
         }
+    }
+
+    override fun onDestroy() {
+        cfBypass.detachFrom(this)
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

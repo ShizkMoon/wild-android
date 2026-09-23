@@ -42,6 +42,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,12 +60,16 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
-import app.wild.android.data.mock.MockDownload
-import app.wild.android.data.mock.WildMock
+import app.wild.android.data.local.NovelDownloadEntity
 import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.EmptyBlock
-import kotlinx.coroutines.delay
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.vm.DownloadDetailViewModel
+import app.wild.android.ui.vm.DownloadsViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 private data class DownloadStatusStyle(val label: String, val icon: ImageVector, val color: Color)
 
@@ -78,24 +84,42 @@ private fun statusStyle(status: Int): DownloadStatusStyle = when (status) {
 /**
  * 下载列表（spec §2.15）：「更多→下载」。列表项 = 封面 80×120 + 书名 + 作者
  * + 「x/y 章节」+ 状态文字与图标；AppBar 刷新 = 重置失败下载。
+ * Stage 4：`novel_download` Flow 实时驱动；重置 = 失败章归队续传。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DownloadsScreen(onBack: () -> Unit, onOpenDetail: (Int) -> Unit) {
-    var downloads by remember { mutableStateOf(WildMock.downloads) }
+fun DownloadsScreen(
+    onBack: () -> Unit,
+    onOpenDetail: (Int) -> Unit,
+    vm: DownloadsViewModel = koinViewModel(),
+) {
+    val downloads by vm.downloads.collectAsState()
+    val running by vm.running.collectAsState()
+    val current by vm.current.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("下载") },
+                title = {
+                    Column {
+                        Text("下载")
+                        if (running && current != null) {
+                            Text(
+                                "正在下载：$current",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
                 },
                 actions = {
                     IconButton(onClick = {
-                        downloads = downloads.map { if (it.status == 2) it.copy(status = 0) else it }
+                        vm.resetAllFailed()
                         scope.launch { snackbar.showSnackbar("已重置所有失败的下载") }
                     }) {
                         Icon(Icons.Outlined.Refresh, "重置失败下载")
@@ -115,7 +139,7 @@ fun DownloadsScreen(onBack: () -> Unit, onOpenDetail: (Int) -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .clickable { onOpenDetail(d.novelId) },
+                            .clickable { onOpenDetail(d.aid) },
                     ) {
                         Row(Modifier.padding(12.dp)) {
                             Surface(
@@ -123,7 +147,7 @@ fun DownloadsScreen(onBack: () -> Unit, onOpenDetail: (Int) -> Unit) {
                                     .width(80.dp)
                                     .aspectRatio(80f / 120f)
                                     .clip(RoundedCornerShape(8.dp)),
-                            ) { CoverImage(d.novelName) }
+                            ) { CoverImage(d.novelName, d.coverUrl) }
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(d.novelName, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -131,7 +155,7 @@ fun DownloadsScreen(onBack: () -> Unit, onOpenDetail: (Int) -> Unit) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.AutoMirrored.Outlined.MenuBook, null, tint = Color.Gray, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("${d.downloadedChapters}/${d.chosenChapters} 章节", fontSize = 14.sp, color = Color.Gray)
+                                    Text("${d.doneChapters}/${d.totalChapters} 章节", fontSize = 14.sp, color = Color.Gray)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(st.icon, null, tint = st.color, modifier = Modifier.size(16.dp))
@@ -150,20 +174,28 @@ fun DownloadsScreen(onBack: () -> Unit, onOpenDetail: (Int) -> Unit) {
 /**
  * 下载详情（spec §2.15）：详情页同款布局 + 状态胶囊 + 删除钮；
  * 点章节直进普通阅读器（离线阅读入口）。
+ * Stage 4：novel_download + download_chapter 实时状态；删除 = 状态 3 → 引擎清文件。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> Unit) {
-    val download = remember(aid) {
-        WildMock.downloads.firstOrNull { it.novelId == aid }
-            ?: MockDownload(aid, WildMock.novelInfo(aid).title, WildMock.novelInfo(aid).author, 1, 10, 10)
-    }
-    val info = remember(aid) { WildMock.novelInfo(aid) }
-    val volumes = remember(aid) { WildMock.volumes(aid) }
+fun DownloadDetailScreen(
+    aid: Int,
+    onBack: () -> Unit,
+    onOpenChapter: (Int) -> Unit,
+    vm: DownloadDetailViewModel = koinViewModel(parameters = { parametersOf(aid) }),
+) {
+    val download by vm.download.collectAsState()
+    val info by vm.info.collectAsState()
+    val volumes by vm.volumes.collectAsState()
+    val chapters by vm.chapters.collectAsState()
     var showDeleteDialog by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val st = statusStyle(download.status)
+
+    LaunchedEffect(aid) { vm.load() }
+
+    val st = statusStyle(download?.status ?: 0)
+    val doneCids = chapters.filter { it.status == 1 }.map { it.cid }.toSet()
 
     val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
     val maxWidth = when {
@@ -205,14 +237,14 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
                                 .width(120.dp)
                                 .aspectRatio(120f / 160f)
                                 .clip(RoundedCornerShape(8.dp)),
-                        ) { CoverImage(info.title) }
+                        ) { CoverImage(info?.title ?: download?.novelName ?: "", info?.coverUrl ?: download?.coverUrl) }
                         Spacer(Modifier.width(16.dp))
                         Column {
-                            Text(info.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(info?.title ?: download?.novelName ?: "", style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.height(4.dp))
-                            Text("作者：${info.author}", style = MaterialTheme.typography.bodyMedium)
+                            Text("作者：${info?.author ?: download?.author ?: ""}", style = MaterialTheme.typography.bodyMedium)
                             Spacer(Modifier.height(4.dp))
-                            Text("状态：${info.status}", style = MaterialTheme.typography.bodyMedium)
+                            Text("状态：${info?.status ?: ""}", style = MaterialTheme.typography.bodyMedium)
                             Spacer(Modifier.height(8.dp))
                             // 下载状态胶囊
                             Surface(
@@ -233,13 +265,16 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
                         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        Text("更新: ${info.finUpdate}", style = MaterialTheme.typography.bodyMedium)
-                        Text("下载进度: ${download.downloadedChapters}/${download.chosenChapters}", style = MaterialTheme.typography.bodyMedium)
+                        Text("更新: ${info?.finUpdate ?: "-"}", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "下载进度: ${download?.doneChapters ?: doneCids.size}/${download?.totalChapters ?: chapters.size}",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("简介", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))
-                    HtmlLite(info.introduce)
+                    HtmlLite(info?.introduceHtml ?: "")
                 }
             }
             volumes.forEach { volume ->
@@ -251,9 +286,10 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                     ) {
                         Column(Modifier.padding(16.dp)) {
-                            Text(volume.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(volume.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 8.dp))
                             volume.chapters.forEach { ch ->
+                                val downloaded = ch.cid in doneCids
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -261,10 +297,18 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
                                         .padding(vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Text(ch.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                    Text(
+                                        ch.title,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (downloaded) MaterialTheme.colorScheme.onSurface
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f),
+                                    )
                                     Icon(
-                                        Icons.Filled.ChevronRight, null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        if (downloaded) Icons.Outlined.CheckCircleOutline else Icons.Filled.ChevronRight,
+                                        null,
+                                        tint = if (downloaded) Color(0xFF4CAF50)
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(20.dp),
                                     )
                                 }
@@ -285,8 +329,10 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
-                    scope.launch { snackbar.showSnackbar("已删除下载（mock）") }
-                    onBack()
+                    vm.delete {
+                        scope.launch { snackbar.showSnackbar("已删除下载") }
+                        onBack()
+                    }
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
@@ -297,5 +343,5 @@ fun DownloadDetailScreen(aid: Int, onBack: () -> Unit, onOpenChapter: (Int) -> U
 @Preview(showBackground = true, widthDp = 360, heightDp = 760)
 @Composable
 private fun DownloadsPreview() {
-    app.wild.android.ui.theme.WildTheme { DownloadsScreen({}, {}) }
+    app.wild.android.ui.theme.WildTheme { Text("预览需要 Koin 环境，见真机截图") }
 }

@@ -2,7 +2,7 @@
 
 Wild 轻小说文库的安卓原生复刻 —— Kotlin + Jetpack Compose + Material 3（含 Expressive）+ 多设备自适应。Android-native rewrite of the Wild Wenku8 client.
 
-> 当前为 **骨架阶段**（SZKM-49）：只有自适应导航外壳 + MD3 主题 + 分层/持久化基础设施，不含真实功能与复刻界面。复刻基准见 SZKM-48 的 `wild-spec.md`。
+> 当前为 **全量接线阶段**（Stage 4）：真实 Wenku8 数据源（HTML 抓取 + CF 绕过）已接通全部界面，含阅读器双模式、下载引擎与历史/书架/账户。架构见 `docs/architecture.md`；复刻基准见 SZKM-48 的 `wild-spec.md`。
 
 ## 技术栈
 
@@ -44,9 +44,11 @@ app/src/main/java/app/wild/android/
 ├── di/AppModule.kt          # Koin 模块（DB / DAO / SettingsStore / Repository）
 ├── data/
 │   ├── local/               # Room：Entities + Daos + WildDatabase（对齐 spec §3.5）
-│   ├── prefs/SettingsStore.kt   # DataStore（主题模式 / API Host；property 表等价物）
-│   ├── remote/Wenku8DataSource.kt  # 混合数据通道接口边界（决策 A，Stage 4 接实现）
-│   └── repository/          # LibraryRepository / SessionRepository（本地状态单一源）
+│   ├── prefs/SettingsStore.kt   # DataStore（主题模式 / API Host / 阅读器设置）
+│   ├── remote/              # Wenku8DataSource 接口 + Wenku8HtmlSource(Jsoup)
+│   │                        #   + Wenku8Client(OkHttp/cookie/接口缓存) + CfBypass
+│   ├── download/            # DownloadEngine（章级状态机 + filesDir 落盘）
+│   └── repository/          # LibraryRepository / SessionRepository / ReaderContentSource
 └── ui/
     ├── theme/Theme.kt       # MD3：动态取色 + 浅/深 fallback scheme
     ├── navigation/WildNavShell.kt  # NavigationSuiteScaffold + WindowSizeClass→导航形态

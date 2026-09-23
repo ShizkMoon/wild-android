@@ -15,6 +15,8 @@ import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.window.core.layout.WindowSizeClass
+import app.wild.android.ui.vm.HomeViewModel
+import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * `/category` 路由页（spec：详情页 tag chip 跳入，外层包 AppBar(「分类」)）。
@@ -27,6 +29,7 @@ fun CategoryScreen(
     showAppBar: Boolean,
     onBack: () -> Unit,
     onNovelClick: (Int) -> Unit,
+    vm: HomeViewModel = koinViewModel(),
 ) {
     val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
     val columns = when {
@@ -48,6 +51,7 @@ fun CategoryScreen(
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             CategoryTab(
+                vm = vm,
                 onNovelClick = onNovelClick,
                 onCategoryClick = {},
                 columns = columns,

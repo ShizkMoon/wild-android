@@ -53,6 +53,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,13 +70,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import app.wild.android.data.mock.WildMock
+import app.wild.android.data.local.ReadingHistoryEntity
+import app.wild.android.data.remote.NovelCover
 import app.wild.android.ui.components.BOOKSHELF_ASPECT
 import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.EmptyBlock
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.components.NovelCoverCard
-import kotlinx.coroutines.delay
+import app.wild.android.ui.vm.BookshelfViewModel
+import app.wild.android.ui.vm.HistoryViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -82,21 +89,28 @@ import java.util.Locale
 /**
  * 书架 tab（spec §2.5）：AppBar「我的书架」+ [容量 info, 多选] / 多选态 [删除, 移动, 关闭]，
  * bottom=书架 FilterChip 横滑条；3 列网格 _BookCard（0.7 比）+ 多选圆勾。
+ * Stage 4：`bookcase.php` 真实数据（需登录+clearance）；多选以 bid 操作；
+ * 未登录态给明确提示而不是空白。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
-    var caseIndex by rememberSaveable { mutableIntStateOf(0) }
+fun BookshelfScreen(
+    onNovelClick: (Int) -> Unit,
+    vm: BookshelfViewModel = koinViewModel(),
+) {
+    val state by vm.state.collectAsState()
     var selecting by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf(setOf<Int>()) }
+    var selected by remember { mutableStateOf(setOf<Int>()) } // bid 集合
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showMoveDialog by remember { mutableStateOf(false) }
     var showTip by remember { mutableStateOf(false) }
-    var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
-    val books = WildMock.novels.take(9)
+    LaunchedEffect(Unit) { vm.load() }
+
+    val items = state.page?.items.orEmpty()
+    val itemByBid = remember(items) { items.associateBy { it.bid } }
 
     Scaffold(
         topBar = {
@@ -120,7 +134,7 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
                             IconButton(onClick = { showTip = true }) {
                                 Icon(Icons.Outlined.Info, "书架容量")
                             }
-                            IconButton(onClick = { selecting = true }) {
+                            IconButton(onClick = { selecting = true }, enabled = items.isNotEmpty()) {
                                 Icon(Icons.Outlined.SelectAll, "多选")
                             }
                         }
@@ -133,12 +147,12 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(WildMock.bookcases.size) { i ->
-                        val c = WildMock.bookcases[i]
+                    items(state.classes.size) { i ->
+                        val c = state.classes[i]
                         FilterChip(
-                            selected = caseIndex == i,
-                            onClick = { caseIndex = i },
-                            label = { Text(c.title) },
+                            selected = state.classIndex == i,
+                            onClick = { vm.loadClass(i) },
+                            label = { Text(c.name) },
                         )
                     }
                 }
@@ -146,19 +160,19 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = refreshing,
-            onRefresh = {
-                refreshing = true
-                scope.launch { delay(600); refreshing = false }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            if (books.isEmpty()) {
-                EmptyBlock("书架为空")
-            } else {
+        when {
+            state.loading -> LoadingBlock(Modifier.padding(padding))
+            state.needLogin -> EmptyBlock("书架需要登录后使用", Modifier.padding(padding))
+            state.error != null && items.isEmpty() ->
+                ErrorBlock(state.error!!, onRefresh = { vm.load() })
+            items.isEmpty() -> EmptyBlock("书架为空", Modifier.padding(padding))
+            else -> PullToRefreshBox(
+                isRefreshing = false,
+                onRefresh = { vm.loadClass(state.classIndex) },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
@@ -166,24 +180,24 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(books.size) { i ->
-                        val novel = books[i]
+                    items(items.size) { i ->
+                        val book = items[i]
                         Box {
                             NovelCoverCard(
-                                novel,
+                                NovelCover(book.aid, book.title, book.coverUrl),
                                 aspect = BOOKSHELF_ASPECT,
                                 onClick = {
                                     if (selecting) {
                                         selected =
-                                            if (novel.aid in selected) selected - novel.aid
-                                            else selected + novel.aid
+                                            if (book.bid in selected) selected - book.bid
+                                            else selected + book.bid
                                     } else {
-                                        onNovelClick(novel.aid)
+                                        onNovelClick(book.aid)
                                     }
                                 },
                             )
                             if (selecting) {
-                                val isSelected = novel.aid in selected
+                                val isSelected = book.bid in selected
                                 Surface(
                                     modifier = Modifier
                                         .align(Alignment.TopEnd)
@@ -192,8 +206,8 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
                                         .clip(CircleShape)
                                         .clickable {
                                             selected =
-                                                if (isSelected) selected - novel.aid
-                                                else selected + novel.aid
+                                                if (isSelected) selected - book.bid
+                                                else selected + book.bid
                                         },
                                     shape = CircleShape,
                                     color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,
@@ -221,7 +235,7 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
         AlertDialog(
             onDismissRequest = { showTip = false },
             title = { Text("书架容量") },
-            text = { Text("您的书架可收藏 100 本，已收藏 ${books.size} 本") },
+            text = { Text(state.page?.capacityTip ?: "您的书架可收藏 100 本") },
             confirmButton = { TextButton(onClick = { showTip = false }) { Text("确定") } },
         )
     }
@@ -229,12 +243,15 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("确认删除") },
-            text = { Text("确定要删除选中的书籍吗？") },
+            text = { Text("确定要删除选中的 ${selected.size} 本书籍吗？") },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteDialog = false
                     selecting = false
-                    scope.launch { snackbar.showSnackbar("已删除（mock）") }
+                    vm.moveSelected(selected.toList(), -1) { msg ->
+                        selected = emptySet()
+                        scope.launch { snackbar.showSnackbar(msg) }
+                    }
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { showDeleteDialog = false }) { Text("取消") } },
@@ -246,13 +263,16 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
             title = { Text("移动到书架") },
             text = {
                 Column {
-                    WildMock.bookcases.filterIndexed { i, _ -> i != caseIndex }.forEach { c ->
+                    state.classes.filterIndexed { i, _ -> i != state.classIndex }.forEach { c ->
                         ListItem(
-                            headlineContent = { Text(c.title) },
+                            headlineContent = { Text(c.name) },
                             modifier = Modifier.clickable {
                                 showMoveDialog = false
                                 selecting = false
-                                scope.launch { snackbar.showSnackbar("已移动到「${c.title}」（mock）") }
+                                vm.moveSelected(selected.toList(), c.classId) { msg ->
+                                    selected = emptySet()
+                                    scope.launch { snackbar.showSnackbar(msg) }
+                                }
                             },
                         )
                     }
@@ -266,16 +286,18 @@ fun BookshelfScreen(onNovelClick: (Int) -> Unit) {
 /**
  * 历史 tab（spec §2.6）：AppBar「阅读历史」+ 清空钮；列表卡
  * （封面 80×120 + 书名/作者/最后阅读时间 + 「继续阅读」按钮条）。
+ * Stage 4：`reading_history` Flow 驱动；单删=长按弹确认；清空走 DAO。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun HistoryScreen(
     onNovelClick: (Int) -> Unit,
-    onContinueRead: (app.wild.android.data.mock.MockHistory) -> Unit,
+    onContinueRead: (ReadingHistoryEntity) -> Unit,
+    vm: HistoryViewModel = koinViewModel(),
 ) {
-    var histories by remember { mutableStateOf(WildMock.histories) }
+    val histories by vm.history.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
-    var deleteTarget by remember { mutableStateOf<app.wild.android.data.mock.MockHistory?>(null) }
+    var deleteTarget by remember { mutableStateOf<ReadingHistoryEntity?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -299,10 +321,7 @@ fun HistoryScreen(
         } else {
             PullToRefreshBox(
                 isRefreshing = refreshing,
-                onRefresh = {
-                    refreshing = true
-                    scope.launch { delay(500); refreshing = false }
-                },
+                onRefresh = { refreshing = true; refreshing = false },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
@@ -328,7 +347,7 @@ fun HistoryScreen(
                                             .width(80.dp)
                                             .aspectRatio(80f / 120f)
                                             .clip(RoundedCornerShape(4.dp)),
-                                    ) { CoverImage(h.novelName) }
+                                    ) { CoverImage(h.novelName, h.coverUrl) }
                                     Spacer(Modifier.width(12.dp))
                                     Column {
                                         Text(h.novelName, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -336,7 +355,7 @@ fun HistoryScreen(
                                         Text("作者：${h.author}", style = MaterialTheme.typography.bodyMedium)
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            "最后阅读：${fmt.format(Date(h.lastReadAt))}",
+                                            "最后阅读：${fmt.format(Date(h.lastReadAtMs))}",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -384,7 +403,7 @@ fun HistoryScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showClearDialog = false
-                    histories = emptyList()
+                    vm.clearAll()
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消") } },
@@ -397,7 +416,7 @@ fun HistoryScreen(
             text = { Text("确定要删除《${h.novelName}》的阅读历史吗？") },
             confirmButton = {
                 TextButton(onClick = {
-                    histories = histories - h
+                    vm.delete(h)
                     deleteTarget = null
                     scope.launch { snackbar.showSnackbar("已删除阅读历史") }
                 }) { Text("确定") }
@@ -409,7 +428,7 @@ fun HistoryScreen(
 
 /**
  * 更多 tab（spec §2.16）：AppBar「更多」+ 4 ListTile（下载/账户/设置/关于）。
- * 「关于」trailing 带「新版本」pill（mock 恒无更新时不显示）。
+ * 「关于」trailing 带「新版本」pill（无更新时隐藏）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -450,7 +469,6 @@ fun MoreScreen(
                 headlineContent = { Text("关于") },
                 trailingContent = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 「新版本」pill —— mock 恒无更新时隐藏（spec F41）
                         Icon(Icons.Filled.ChevronRight, null)
                     }
                 },
@@ -463,17 +481,5 @@ fun MoreScreen(
 @Preview(showBackground = true, widthDp = 360, heightDp = 760)
 @Composable
 private fun BookshelfPreview() {
-    app.wild.android.ui.theme.WildTheme { BookshelfScreen {} }
-}
-
-@Preview(showBackground = true, widthDp = 360, heightDp = 760)
-@Composable
-private fun HistoryPreview() {
-    app.wild.android.ui.theme.WildTheme { HistoryScreen({}, {}) }
-}
-
-@Preview(showBackground = true, widthDp = 360, heightDp = 760)
-@Composable
-private fun MorePreview() {
-    app.wild.android.ui.theme.WildTheme { MoreScreen({}, {}, {}, {}) }
+    app.wild.android.ui.theme.WildTheme { Text("预览需要 Koin 环境，见真机截图") }
 }

@@ -1,5 +1,8 @@
 package app.wild.android.ui.screen
 
+import android.graphics.BitmapFactory
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,8 +34,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,7 +44,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -48,25 +54,36 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.wild.android.R
 import app.wild.android.ui.components.CaptchaImage
-import kotlinx.coroutines.delay
+import app.wild.android.ui.vm.SessionViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
 
 /**
  * 登录页 `/login`（spec §2.2）：AppBar「登录轻小说文库」+ 垂直居中表单。
- * Stage 3 走桩：验证码图为程序化假图（点击刷新），任意输入登录成功进主页。
+ * Stage 4：验证码 = `checkcode.php` 真实 PNG（点击刷新，拉取失败落回程序化占位图）；
+ * 登录 = POST `/login.php`（checkcode 字段照发，服务端不校验也无害），
+ * 失败文案取服务器返回（如「密码错误」）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LoginScreen(onLoginSuccess: () -> Unit) {
+fun LoginScreen(
+    onLoginSuccess: () -> Unit,
+    vm: SessionViewModel = koinViewModel(),
+) {
     var username by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var captchaText by rememberSaveable { mutableStateOf("") }
-    var captchaSeed by remember { mutableIntStateOf(0) }
-    var captchaLoading by remember { mutableStateOf(false) }
-    var loggingIn by remember { mutableStateOf(false) }
+    var captchaSeed by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     var showRegisterDialog by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    val captchaBytes by vm.captcha.collectAsState()
+    val captchaLoading by vm.captchaLoading.collectAsState()
+    val loggingIn by vm.loggingIn.collectAsState()
+
+    LaunchedEffect(Unit) { vm.refreshCaptcha() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("登录轻小说文库") }) },
@@ -111,23 +128,39 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
 
                 // 验证码图：200×50，点击刷新（spec §2.2）
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    if (captchaLoading) {
-                        Box(Modifier.size(200.dp, 50.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator()
+                    val bytes = captchaBytes
+                    when {
+                        captchaLoading -> Box(
+                            Modifier.size(200.dp, 50.dp),
+                            contentAlignment = Alignment.Center,
+                        ) { CircularProgressIndicator() }
+                        bytes != null -> {
+                            val bmp = remember(bytes) {
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                            }
+                            if (bmp != null) {
+                                Image(
+                                    bitmap = bmp,
+                                    contentDescription = "验证码，点击刷新",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .size(200.dp, 50.dp)
+                                        .clickable { vm.refreshCaptcha() },
+                                )
+                            } else {
+                                CaptchaImage(
+                                    seed = captchaSeed,
+                                    modifier = Modifier
+                                        .size(200.dp, 50.dp)
+                                        .clickable { captchaSeed++; vm.refreshCaptcha() },
+                                )
+                            }
                         }
-                    } else {
-                        CaptchaImage(
+                        else -> CaptchaImage(
                             seed = captchaSeed,
                             modifier = Modifier
                                 .size(200.dp, 50.dp)
-                                .clickable {
-                                    captchaLoading = true
-                                    scope.launch {
-                                        delay(400)
-                                        captchaSeed++
-                                        captchaLoading = false
-                                    }
-                                },
+                                .clickable { captchaSeed++; vm.refreshCaptcha() },
                         )
                     }
                 }
@@ -154,14 +187,16 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                     scope.launch { snackbar.showSnackbar("请输入用户名") }
                                 password.isBlank() ->
                                     scope.launch { snackbar.showSnackbar("请输入密码") }
-                                captchaText.isBlank() ->
-                                    scope.launch { snackbar.showSnackbar("请输入验证码") }
                                 else -> {
-                                    loggingIn = true
-                                    scope.launch {
-                                        delay(800) // mock 登录耗时
-                                        loggingIn = false
-                                        onLoginSuccess()
+                                    vm.login(username, password, captchaText) { r ->
+                                        r.onSuccess { onLoginSuccess() }
+                                            .onFailure {
+                                                scope.launch {
+                                                    snackbar.showSnackbar(
+                                                        it.message ?: "登录失败"
+                                                    )
+                                                }
+                                            }
                                     }
                                 }
                             }
@@ -186,7 +221,11 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     showRegisterDialog = false
-                    scope.launch { snackbar.showSnackbar("（mock）将跳转 https://www.wenku8.net/register.php") }
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.wenku8.net/register.php"))
+                        )
+                    }
                 }) { Text("确定") }
             },
             dismissButton = {
@@ -199,5 +238,5 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
 @Preview(showBackground = true, widthDp = 360, heightDp = 760)
 @Composable
 private fun LoginScreenPreview() {
-    app.wild.android.ui.theme.WildTheme { LoginScreen {} }
+    app.wild.android.ui.theme.WildTheme { LoginScreen(onLoginSuccess = {}) }
 }

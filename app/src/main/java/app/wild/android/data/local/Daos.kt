@@ -15,6 +15,9 @@ interface CookieDao {
     @Query("SELECT * FROM cookie WHERE domain = :domain OR domain LIKE '%' || :domain")
     suspend fun forDomain(domain: String): List<CookieEntity>
 
+    @Query("SELECT * FROM cookie")
+    suspend fun all(): List<CookieEntity>
+
     @Query("SELECT EXISTS(SELECT 1 FROM cookie WHERE name = 'jieqiUserInfo')")
     suspend fun isLoggedIn(): Boolean
 
@@ -116,9 +119,67 @@ interface DownloadDao {
     @Query("SELECT * FROM novel_download ORDER BY updatedAtMs DESC")
     fun observeAll(): Flow<List<NovelDownloadEntity>>
 
+    @Query("SELECT * FROM novel_download WHERE aid = :aid")
+    suspend fun get(aid: Int): NovelDownloadEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: NovelDownloadEntity)
 
     @Query("UPDATE novel_download SET status = :status, updatedAtMs = :nowMs WHERE aid = :aid")
     suspend fun setStatus(aid: Int, status: Int, nowMs: Long)
+
+    @Query("UPDATE novel_download SET doneChapters = :done, status = :status, updatedAtMs = :nowMs WHERE aid = :aid")
+    suspend fun setProgress(aid: Int, done: Int, status: Int, nowMs: Long)
+
+    @Query("DELETE FROM novel_download WHERE aid = :aid")
+    suspend fun delete(aid: Int)
+
+    // ---- 章节队列 ----
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertChapter(entry: DownloadChapterEntity)
+
+    @Query("SELECT * FROM download_chapter WHERE aid = :aid")
+    suspend fun chapters(aid: Int): List<DownloadChapterEntity>
+
+    @Query("SELECT * FROM download_chapter WHERE aid = :aid")
+    fun observeChapters(aid: Int): Flow<List<DownloadChapterEntity>>
+
+    @Query("SELECT * FROM download_chapter WHERE aid = :aid AND status = 0 ORDER BY cid")
+    suspend fun pendingChapters(aid: Int): List<DownloadChapterEntity>
+
+    @Query("SELECT DISTINCT aid FROM download_chapter WHERE status = 0")
+    suspend fun aidsWithPending(): List<Int>
+
+    @Query("SELECT aid FROM novel_download WHERE status = :status")
+    suspend fun aidsWithStatus(status: Int): List<Int>
+
+    @Query("UPDATE download_chapter SET status = :status, attempts = attempts + 1 WHERE aid = :aid AND cid = :cid")
+    suspend fun setChapterStatus(aid: Int, cid: Int, status: Int)
+
+    @Query("SELECT cid FROM download_chapter WHERE aid = :aid AND status = 1")
+    suspend fun downloadedCids(aid: Int): List<Int>
+
+    @Query("SELECT COUNT(*) FROM download_chapter WHERE aid = :aid AND status = 1")
+    suspend fun doneCount(aid: Int): Int
+
+    @Query("UPDATE download_chapter SET status = 0 WHERE aid = :aid AND status = 2")
+    suspend fun resetFailed(aid: Int)
+
+    @Query("UPDATE download_chapter SET status = 0, attempts = 0 WHERE status = 2")
+    suspend fun resetAllFailed()
+
+    @Query("DELETE FROM download_chapter WHERE aid = :aid")
+    suspend fun deleteChapters(aid: Int)
+}
+
+@Dao
+interface BookshelfLocalDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun add(entry: BookshelfLocalEntity)
+
+    @Query("DELETE FROM bookshelf_local WHERE aid = :aid")
+    suspend fun remove(aid: Int)
+
+    @Query("SELECT EXISTS(SELECT 1 FROM bookshelf_local WHERE aid = :aid)")
+    suspend fun contains(aid: Int): Boolean
 }

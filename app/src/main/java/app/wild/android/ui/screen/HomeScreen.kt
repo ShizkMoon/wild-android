@@ -39,6 +39,8 @@ import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneSca
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,16 +58,29 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
-import app.wild.android.data.mock.WildMock
 import app.wild.android.ui.components.EmptyBlock
 import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.LoadingBlock
 import app.wild.android.ui.components.NovelGrid
+import app.wild.android.ui.vm.HomeViewModel
+import app.wild.android.ui.vm.Paged
+import app.wild.android.data.remote.NovelCover
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+
+/** 排行榜 sort 标签↔值（audit_pages_general.md:204）。 */
+private val TOPLIST_SORTS = listOf(
+    "更新" to "lastupdate", "发布" to "postdate", "总访问" to "allvisit",
+    "总推荐" to "allvote", "总收藏" to "goodnum", "日访问" to "dayvisit",
+    "日推荐" to "dayvote", "月访问" to "monthvisit", "月推荐" to "monthvote",
+    "周访问" to "weekvisit", "周推荐" to "weekvote", "字数" to "size", "动画" to "anime",
+)
 
 /**
  * 首页框架页 `/home` tab0（spec §2.4）：AppBar「轻小说文库」+ 搜索 icon + TabBar(4)。
  * 宽屏（width ≥ medium）：浏览网格 + 小说详情组成 ListDetailPaneScaffold 双栏
  * （canonical layout）；窄屏维持原 App 单栏 + 路由跳详情。
+ * Stage 4：四 tab 全部接真实数据源（推荐/分类/排行/完结），错误块统一下拉刷新。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -77,6 +92,7 @@ fun HomeScreen(
     onDownloadSelect: (Int) -> Unit = {},
     onAuthorClick: (String) -> Unit = {},
     onChapterClick: (Int, Int) -> Unit = { _, _ -> },
+    vm: HomeViewModel = koinViewModel(),
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
@@ -119,6 +135,7 @@ fun HomeScreen(
                     AnimatedPane {
                         HomeTabContent(
                             tab = tab,
+                            vm = vm,
                             onNovelClick = { aid ->
                                 scope.launch {
                                     navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, aid)
@@ -156,7 +173,7 @@ fun HomeScreen(
             )
         } else {
             Box(Modifier.padding(padding)) {
-                HomeTabContent(tab = tab, onNovelClick = onNovelClick, onCategoryClick = onCategoryClick)
+                HomeTabContent(tab = tab, vm = vm, onNovelClick = onNovelClick, onCategoryClick = onCategoryClick)
             }
         }
     }
@@ -165,6 +182,7 @@ fun HomeScreen(
 @Composable
 private fun HomeTabContent(
     tab: Int,
+    vm: HomeViewModel,
     onNovelClick: (Int) -> Unit,
     onCategoryClick: (String) -> Unit,
 ) {
@@ -175,52 +193,88 @@ private fun HomeTabContent(
         else -> 3
     }
     when (tab) {
-        0 -> RecommendTab(onNovelClick, columns)
-        1 -> CategoryTab(onNovelClick, onCategoryClick, columns)
-        2 -> ToplistTab(onNovelClick, columns)
-        3 -> FinishedTab(onNovelClick, columns)
+        0 -> RecommendTab(vm, onNovelClick, columns)
+        1 -> CategoryTab(vm, onNovelClick, onCategoryClick, columns)
+        2 -> ToplistTab(vm, onNovelClick, columns)
+        3 -> FinishedTab(vm, onNovelClick, columns)
+    }
+}
+
+/** 分页网格的通用呈现：loading → 菊花；error → 错误块；空 → 空态；否则 NovelGrid。 */
+@Composable
+private fun PagedGrid(
+    paged: Paged<NovelCover>,
+    columns: Int,
+    onNovelClick: (Int) -> Unit,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
+    emptyText: String = "暂无内容",
+) {
+    when {
+        paged.loading && paged.items.isEmpty() -> LoadingBlock()
+        paged.error != null && paged.items.isEmpty() ->
+            ErrorBlock(paged.error, onRefresh = onRefresh)
+        paged.items.isEmpty() -> EmptyBlock(emptyText)
+        else -> NovelGrid(
+            novels = paged.items,
+            onNovelClick = { onNovelClick(it.aid) },
+            columns = columns,
+            hasMore = !paged.endReached,
+            loadingMore = paged.loadingMore,
+            onLoadMore = onLoadMore,
+        )
     }
 }
 
 /** 推荐 tab（spec §2.4）：区块标题(titleLarge bold, 16/16/16/8) + 3 列封面网格。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RecommendTab(onNovelClick: (Int) -> Unit, columns: Int) {
+private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns: Int) {
+    val state by vm.recommend.collectAsState()
     var refreshing by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { vm.loadRecommend() }
+
     PullToRefreshBox(
         isRefreshing = refreshing,
         onRefresh = {
             refreshing = true
-            scope.launch { kotlinx.coroutines.delay(600); refreshing = false }
+            vm.loadRecommend(force = true)
+            refreshing = false
         },
         modifier = Modifier.fillMaxSize(),
     ) {
-        androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
-            WildMock.homeBlocks.forEach { block ->
-                item {
-                    Text(
-                        block.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
-                    )
-                }
-                item {
-                    // 每区块固定 3 列 × 2 行的静态网格（spec：shrinkWrap + NeverScrollable）
-                    Column(Modifier.padding(horizontal = 8.dp)) {
-                        block.novels.take(6).chunked(3).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                row.forEach { novel ->
-                                    app.wild.android.ui.components.NovelCoverCard(
-                                        novel,
-                                        onClick = { onNovelClick(novel.aid) },
-                                        modifier = Modifier.weight(1f),
-                                    )
+        when {
+            state.loading && state.data == null -> LoadingBlock()
+            state.error != null && state.data == null ->
+                ErrorBlock(state.error!!, onRefresh = { vm.loadRecommend(force = true) })
+            state.data.isNullOrEmpty() ->
+                EmptyBlock("站点公告：本站已正式关闭新书上架，推荐区块为空")
+            else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
+                state.data!!.forEach { block ->
+                    item {
+                        Text(
+                            block.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+                        )
+                    }
+                    item {
+                        // 每区块固定 3 列 × 2 行的静态网格（spec：shrinkWrap + NeverScrollable）
+                        Column(Modifier.padding(horizontal = 8.dp)) {
+                            block.novels.take(6).chunked(3).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    row.forEach { novel ->
+                                        app.wild.android.ui.components.NovelCoverCard(
+                                            novel,
+                                            onClick = { onNovelClick(novel.aid) },
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                                 }
-                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                                androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
                             }
-                            androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
                         }
                     }
                 }
@@ -232,6 +286,7 @@ private fun RecommendTab(onNovelClick: (Int) -> Unit, columns: Int) {
 /** 分类 tab（spec §2.4/§7）：SegmentedButton 4 档 + 分组 PopupMenu 标签选择器 + 网格。 */
 @Composable
 internal fun CategoryTab(
+    vm: HomeViewModel,
     onNovelClick: (Int) -> Unit,
     onCategoryClick: (String) -> Unit,
     columns: Int,
@@ -240,6 +295,14 @@ internal fun CategoryTab(
     var viewMode by rememberSaveable { mutableIntStateOf(0) }
     var selectedTag by rememberSaveable { mutableStateOf(initialTag?.ifEmpty { null }) }
     var menuOpen by remember { mutableStateOf(false) }
+
+    val tagGroupsState by vm.tagGroups.collectAsState()
+    val paged by vm.category.collectAsState()
+
+    LaunchedEffect(Unit) {
+        vm.loadTagGroups()
+        if (selectedTag != null) vm.selectCategory(selectedTag, viewMode)
+    }
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -252,7 +315,10 @@ internal fun CategoryTab(
                 listOf("更新", "热门", "完结", "动画").forEachIndexed { i, label ->
                     SegmentedButton(
                         selected = viewMode == i,
-                        onClick = { viewMode = i },
+                        onClick = {
+                            viewMode = i
+                            if (selectedTag != null) vm.selectCategory(selectedTag, i)
+                        },
                         shape = SegmentedButtonDefaults.itemShape(index = i, count = 4),
                     ) { Text(label) }
                 }
@@ -275,13 +341,21 @@ internal fun CategoryTab(
                     Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    WildMock.tagGroups.forEach { (group, tags) ->
+                    val groups = tagGroupsState.data.orEmpty()
+                    if (groups.isEmpty()) {
                         DropdownMenuItem(
-                            text = { Text(group, fontSize = 14.sp, fontWeight = FontWeight.Bold) },
+                            text = { Text(if (tagGroupsState.error != null) "分类加载失败" else "加载中…") },
                             onClick = {},
                             enabled = false,
                         )
-                        tags.forEach { tag ->
+                    }
+                    groups.forEach { group ->
+                        DropdownMenuItem(
+                            text = { Text(group.name, fontSize = 14.sp, fontWeight = FontWeight.Bold) },
+                            onClick = {},
+                            enabled = false,
+                        )
+                        group.tags.forEach { tag ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -292,7 +366,11 @@ internal fun CategoryTab(
                                         fontWeight = if (tag == selectedTag) FontWeight.Bold else FontWeight.Normal,
                                     )
                                 },
-                                onClick = { selectedTag = tag; menuOpen = false },
+                                onClick = {
+                                    selectedTag = tag
+                                    menuOpen = false
+                                    vm.selectCategory(tag, viewMode)
+                                },
                             )
                         }
                         HorizontalDivider()
@@ -303,10 +381,12 @@ internal fun CategoryTab(
         if (selectedTag == null) {
             EmptyBlock("请选择分类")
         } else {
-            NovelGrid(
-                novels = WildMock.novels,
-                onNovelClick = { onNovelClick(it.aid) },
+            PagedGrid(
+                paged = paged,
                 columns = columns,
+                onNovelClick = onNovelClick,
+                onRefresh = { vm.selectCategory(selectedTag, viewMode) },
+                onLoadMore = { vm.loadMoreCategory() },
             )
         }
     }
@@ -314,8 +394,11 @@ internal fun CategoryTab(
 
 /** 排行 tab（spec §8）：横滑 FilterChip×13 + 网格。 */
 @Composable
-private fun ToplistTab(onNovelClick: (Int) -> Unit, columns: Int) {
-    var sort by rememberSaveable { mutableStateOf(WildMock.toplistSorts.first().second) }
+private fun ToplistTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns: Int) {
+    var sort by rememberSaveable { mutableStateOf(TOPLIST_SORTS.first().second) }
+    val paged by vm.toplist.collectAsState()
+    LaunchedEffect(Unit) { vm.selectToplist(sort) }
+
     Column(Modifier.fillMaxSize()) {
         LazyRow(
             modifier = Modifier
@@ -323,29 +406,36 @@ private fun ToplistTab(onNovelClick: (Int) -> Unit, columns: Int) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(WildMock.toplistSorts) { (label, value) ->
+            items(TOPLIST_SORTS) { (label, value) ->
                 FilterChip(
                     selected = sort == value,
-                    onClick = { sort = value },
+                    onClick = { sort = value; vm.selectToplist(value) },
                     label = { Text(label) },
                 )
             }
         }
-        NovelGrid(
-            novels = WildMock.novels,
-            onNovelClick = { onNovelClick(it.aid) },
+        PagedGrid(
+            paged = paged,
             columns = columns,
+            onNovelClick = onNovelClick,
+            onRefresh = { vm.selectToplist(sort) },
+            onLoadMore = { vm.loadMoreToplist() },
         )
     }
 }
 
 /** 完结 tab（spec §9）：纯网格，无筛选条。 */
 @Composable
-private fun FinishedTab(onNovelClick: (Int) -> Unit, columns: Int) {
-    NovelGrid(
-        novels = WildMock.novels.filter { it.status == "已完结" }.ifEmpty { WildMock.novels },
-        onNovelClick = { onNovelClick(it.aid) },
+private fun FinishedTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns: Int) {
+    val paged by vm.finished.collectAsState()
+    LaunchedEffect(Unit) { vm.loadFinished() }
+    PagedGrid(
+        paged = paged,
         columns = columns,
+        onNovelClick = onNovelClick,
+        onRefresh = { vm.loadFinished() },
+        onLoadMore = { vm.loadMoreFinished() },
+        emptyText = "完结列表为空（该页面需要登录态）",
     )
 }
 
@@ -353,14 +443,6 @@ private fun FinishedTab(onNovelClick: (Int) -> Unit, columns: Int) {
 @Composable
 private fun HomeScreenPreview() {
     app.wild.android.ui.theme.WildTheme {
-        HomeScreen(onSearchClick = {}, onNovelClick = {}, onCategoryClick = {})
-    }
-}
-
-@Preview(showBackground = true, widthDp = 900, heightDp = 700)
-@Composable
-private fun HomeScreenWidePreview() {
-    app.wild.android.ui.theme.WildTheme {
-        HomeScreen(onSearchClick = {}, onNovelClick = {}, onCategoryClick = {})
+        Text("预览需要 Koin 环境，见真机截图")
     }
 }

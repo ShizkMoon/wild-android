@@ -35,22 +35,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.wild.android.data.mock.MockNovel
+import app.wild.android.data.remote.NovelCover
+import coil3.compose.SubcomposeAsyncImage
 import kotlin.math.abs
 
 /** 封面网格统一纵横比（spec：207/307 ≈ 0.674；书架页用 0.7）。 */
@@ -58,11 +58,28 @@ const val COVER_ASPECT = 207f / 307f
 const val BOOKSHELF_ASPECT = 0.7f
 
 /**
- * 封面占位图：Stage 3 不联网，按书名 hash 生成确定的渐变底色 + 书名首字。
- * Stage 4 换 Coil 时只需替换本 composable 的实现。
+ * 封面图：[url] 非空走 Coil（OkHttp 磁盘缓存 + UA/Referer），
+ * loading/error 回落到书名 hash 渐变占位（原 Stage 3 行为，兼作无 URL 兜底）。
  */
 @Composable
-fun CoverImage(title: String, modifier: Modifier = Modifier) {
+fun CoverImage(title: String, url: String? = null, modifier: Modifier = Modifier) {
+    if (!url.isNullOrBlank()) {
+        SubcomposeAsyncImage(
+            model = url,
+            contentDescription = title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier,
+            loading = { CoverPlaceholder(title, Modifier.fillMaxSize()) },
+            error = { CoverPlaceholder(title, Modifier.fillMaxSize()) },
+        )
+    } else {
+        CoverPlaceholder(title, modifier)
+    }
+}
+
+/** 书名 hash → 确定的渐变底色 + 书名首字（占位图）。 */
+@Composable
+private fun CoverPlaceholder(title: String, modifier: Modifier = Modifier) {
     val palette = remember(title) { coverPalette(title) }
     Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -111,7 +128,7 @@ private fun coverPalette(title: String): List<Color> =
  */
 @Composable
 fun NovelCoverCard(
-    novel: MockNovel,
+    novel: NovelCover,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     aspect: Float = COVER_ASPECT,
@@ -123,6 +140,7 @@ fun NovelCoverCard(
         Column {
             CoverImage(
                 novel.title,
+                novel.coverUrl,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(aspect),
@@ -197,35 +215,31 @@ fun EmptyBlock(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * 通用 3 列封面网格（spec F12）：padding 8 / spacing 8 / 207:307，
- * 无限滚动距底 ≤200dp 追加下一页 mock，末格 loading。
- * [columns] 由调用方按窗口宽度给出（宽屏 >3 列）。
+ * 通用封面网格（spec F12）：padding 8 / spacing 8 / 207:307。
+ * [hasMore]+[loadingMore]+[onLoadMore] = 真实分页无限滚动（距底 ≤6 格触发），
+ * 末行放 loading 格；[columns] 由调用方按窗口宽度给出（宽屏 >3 列）。
  */
 @Composable
 fun NovelGrid(
-    novels: List<MockNovel>,
-    onNovelClick: (MockNovel) -> Unit,
+    novels: List<NovelCover>,
+    onNovelClick: (NovelCover) -> Unit,
     modifier: Modifier = Modifier,
     aspect: Float = COVER_ASPECT,
     columns: Int = 3,
-    extraItemCount: Int = 12,
+    hasMore: Boolean = false,
+    loadingMore: Boolean = false,
+    onLoadMore: () -> Unit = {},
 ) {
-    var shown by remember(novels) { mutableStateOf(novels) }
-    var appending by remember { mutableStateOf(false) }
     val gridState: LazyGridState = rememberLazyGridState()
 
-    // 距底 ≤200px 触发下一页（mock 追加），模拟 spec 的无限滚动行为
-    LaunchedEffect(gridState) {
+    // 距底 ≤6 格触发下一页
+    LaunchedEffect(gridState, novels.size, hasMore) {
         snapshotFlow {
             val info = gridState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
             info.totalItemsCount > 0 && last >= info.totalItemsCount - 6
         }.collect { nearEnd ->
-            if (nearEnd && shown.size < novels.size + extraItemCount && !appending) {
-                appending = true
-                shown = shown + novels
-                appending = false
-            }
+            if (nearEnd && hasMore && !loadingMore) onLoadMore()
         }
     }
 
@@ -237,8 +251,18 @@ fun NovelGrid(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(shown.size) { i ->
-            NovelCoverCard(shown[i % shown.size], onClick = { onNovelClick(shown[i % shown.size]) }, aspect = aspect)
+        items(novels.size) { i ->
+            NovelCoverCard(novels[i], onClick = { onNovelClick(novels[i]) }, aspect = aspect)
+        }
+        if (hasMore) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(aspect),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator(Modifier.size(24.dp)) }
+            }
         }
     }
 }

@@ -13,43 +13,28 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +48,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
@@ -75,21 +61,33 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
-import app.wild.android.data.mock.WildMock
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.vm.ReaderViewModel
+import coil3.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 /**
  * 普通阅读器 `/novel/reader` reader_type=normal（spec §2.8）：
  * 背景 + 水平分页 PageView + 点击三区翻页 + 顶部控制栏（黑 0.7）+ 目录/设置弹层。
  * 分页算法见 [paginate]；进度 = 累计文本字数锚点（spec 决策 C）。
+ * Stage 4：目录/正文来自 [ReaderViewModel]（下载 → 缓存 → 网络三级）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
-    val novel = remember(aid) { WildMock.novelInfo(aid) }
-    val volumes = remember(aid) { WildMock.volumes(aid) }
-    val flat = remember(volumes) { volumes.flatMap { v -> v.chapters.map { v.title to it } } }
-    var currentIndex by rememberSaveable { mutableIntStateOf(flat.indexOfFirst { it.second.cid == cid }.coerceAtLeast(0)) }
+fun PagedReaderScreen(
+    aid: Int,
+    cid: Int,
+    onBack: () -> Unit,
+    vm: ReaderViewModel = koinViewModel(parameters = { parametersOf(aid, cid) }),
+) {
+    LaunchedEffect(Unit) { vm.load() }
+    val st by vm.state.collectAsState()
+    val restore by vm.restoreProgress.collectAsState()
+    val flat = st.flatChapters
+    val currentIndex = st.currentIndex
 
     // 阅读器主题配色（reader_theme_mode → 明/暗配色对）
     val dark = when (ReaderSettings.themeMode) {
@@ -147,7 +145,7 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
             val canvasWPx = wPx - leftPadPx - rightPadPx
             val canvasHPx = hPx - topBarPx - bottomBarPx
 
-            val content = remember(currentIndex) { WildMock.chapterContent(flat[currentIndex].second.title) }
+            val content = st.content ?: ""
             val textStyle = remember(fontSize, lineHeight, fg) {
                 TextStyle(
                     fontSize = fontSize.sp,
@@ -178,6 +176,32 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
             // 换章回到第一页（rememberPagerState 跨章保留旧页码会被钳到末页）
             LaunchedEffect(currentIndex) { pagerState.scrollToPage(0) }
 
+            // 历史进度恢复：进入章节后按累计字数锚点跳到对应页（决策 C；消费一次后清零）
+            LaunchedEffect(restore, content) {
+                if (restore > 0 && content.isNotEmpty() && pages.isNotEmpty()) {
+                    var acc = 0
+                    var target = 0
+                    for (i in pages.indices) {
+                        acc += pages[i].content.length
+                        if (acc >= restore) { target = i; break }
+                        target = i
+                    }
+                    pagerState.scrollToPage(target)
+                    vm.restoreProgress.value = 0
+                }
+            }
+
+            // 进度持久化：页码变化时记 累计字数锚点 + 页索引
+            LaunchedEffect(pagerState.currentPage, currentIndex, content) {
+                if (st.content != null && pages.isNotEmpty()) {
+                    var acc = 0
+                    for (i in 0..pagerState.currentPage.coerceAtMost(pages.size - 1)) {
+                        acc += pages[i].content.length
+                    }
+                    vm.record(currentIndex, content, progressAnchor = acc, page = pagerState.currentPage)
+                }
+            }
+
             // 音量键翻页（spec F23）：下=下一页/末页翻下一章，上=上一页/首页翻上一章
             DisposableEffect(pagerState, pages) {
                 ReaderSettings.volumeKeyHandler = { dir ->
@@ -185,13 +209,13 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                         if (pagerState.currentPage < pages.size - 1) {
                             scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
                         } else if (currentIndex < flat.size - 1) {
-                            currentIndex++
+                            vm.goTo(currentIndex + 1)
                         }
                     } else {
                         if (pagerState.currentPage > 0) {
                             scope.launch { pagerState.scrollToPage(pagerState.currentPage - 1) }
                         } else if (currentIndex > 0) {
-                            currentIndex--
+                            vm.goTo(currentIndex - 1)
                         }
                     }
                 }
@@ -213,7 +237,7 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                                     } else {
                                         val now = System.currentTimeMillis()
                                         if (now - lastPrevTapAt < 2000) {
-                                            if (currentIndex > 0) currentIndex--
+                                            if (currentIndex > 0) vm.goTo(currentIndex - 1)
                                         } else {
                                             lastPrevTapAt = now
                                             scope.launch { snackbar.showSnackbar("再次点击加载上一章") }
@@ -224,7 +248,7 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                                     if (pagerState.currentPage < pages.size - 1) {
                                         scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
                                     } else if (currentIndex < flat.size - 1) {
-                                        currentIndex++
+                                        vm.goTo(currentIndex + 1)
                                     }
                                 }
                                 else -> showControls = !showControls
@@ -253,32 +277,38 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                         .align(Alignment.Center),
                     contentAlignment = Alignment.Center,
                 ) {
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.widthIn(max = contentMaxWidth).fillMaxSize(),
-                        key = { it },
-                    ) { pageIndex ->
-                        val page = pages.getOrNull(pageIndex) ?: ReaderPage("", false)
-                        if (page.isImage) {
-                            ImagePage(
-                                marker = page.content,
-                                pageNum = pageIndex + 1,
-                                pageCount = pages.size,
-                                topPad = topBarPx, bottomPad = bottomBarPx,
-                                leftPad = leftPadPx, rightPad = rightPadPx,
-                                density = density, fg = fg,
-                            )
-                        } else {
-                            TextPage(
-                                text = page.content,
-                                style = textStyle,
-                                spacingPx = spacingPx,
-                                pageNum = pageIndex + 1,
-                                pageCount = pages.size,
-                                topPad = topBarPx, bottomPad = bottomBarPx,
-                                leftPad = leftPadPx, rightPad = rightPadPx,
-                                density = density,
-                            )
+                    when {
+                        st.loading || st.content == null && st.error == null ->
+                            LoadingBlock()
+                        st.error != null ->
+                            ErrorBlock(message = st.error!!, onRefresh = { vm.goTo(currentIndex) })
+                        else -> HorizontalPager(
+                            state = pagerState,
+                            modifier = Modifier.widthIn(max = contentMaxWidth).fillMaxSize(),
+                            key = { it },
+                        ) { pageIndex ->
+                            val page = pages.getOrNull(pageIndex) ?: ReaderPage("", false)
+                            if (page.isImage) {
+                                ImagePage(
+                                    imageUrl = page.content,
+                                    pageNum = pageIndex + 1,
+                                    pageCount = pages.size,
+                                    topPad = topBarPx, bottomPad = bottomBarPx,
+                                    leftPad = leftPadPx, rightPad = rightPadPx,
+                                    density = density, fg = fg,
+                                )
+                            } else {
+                                TextPage(
+                                    text = page.content,
+                                    style = textStyle,
+                                    spacingPx = spacingPx,
+                                    pageNum = pageIndex + 1,
+                                    pageCount = pages.size,
+                                    topPad = topBarPx, bottomPad = bottomBarPx,
+                                    leftPad = leftPadPx, rightPad = rightPadPx,
+                                    density = density,
+                                )
+                            }
                         }
                     }
                 }
@@ -299,7 +329,7 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = Color.White)
                     }
                     Text(
-                        flat[currentIndex].second.title,
+                        flat.getOrNull(currentIndex)?.second?.title ?: st.novelName,
                         color = Color.White,
                         fontSize = 18.sp,
                         maxLines = 1,
@@ -319,15 +349,15 @@ fun PagedReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
 
     if (showCatalog) {
         ChapterCatalogSheet(
-            volumes = volumes,
-            currentCid = flat[currentIndex].second.cid,
+            volumes = st.volumes,
+            currentCid = flat.getOrNull(currentIndex)?.second?.cid ?: cid,
             heightFraction = 0.9f,
             currentHighlightColor = Color.Gray.copy(alpha = 0.3f),
             onDismiss = { showCatalog = false },
             onSelect = { sel ->
                 showCatalog = false
                 val idx = flat.indexOfFirst { it.second.cid == sel }
-                if (idx >= 0) currentIndex = idx
+                if (idx >= 0) vm.goTo(idx)
             },
         )
     }
@@ -378,9 +408,10 @@ private fun TextPage(
     }
 }
 
+/** 插图页：`<!--image-->` 标记的 URL 经 Coil 加载（UA/Referer 已接），失败回落占位插画。 */
 @Composable
 private fun ImagePage(
-    marker: String,
+    imageUrl: String,
     pageNum: Int,
     pageCount: Int,
     topPad: Float,
@@ -399,7 +430,13 @@ private fun ImagePage(
                 .padding(horizontal = with(density) { leftPad.toDp() }),
             contentAlignment = Alignment.Center,
         ) {
-            MockIllustration(seed = marker)
+            SubcomposeAsyncImage(
+                model = imageUrl,
+                contentDescription = "插图",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+                error = { MockIllustration(seed = imageUrl) },
+            )
         }
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text("$pageNum/$pageCount", fontSize = 10.sp, color = fg, modifier = Modifier.alpha(0.3f))
@@ -408,7 +445,7 @@ private fun ImagePage(
     }
 }
 
-/** 插图占位（mock）：确定的渐变天空 + 山形剪影，模拟轻小说插画。 */
+/** 插图加载失败兜底：确定的渐变天空 + 山形剪影。 */
 @Composable
 fun MockIllustration(seed: String, modifier: Modifier = Modifier) {
     val p = remember(seed) { seed.hashCode().let { if (it < 0) -it else it } }

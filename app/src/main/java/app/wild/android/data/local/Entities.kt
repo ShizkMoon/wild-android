@@ -89,3 +89,22 @@ data class NovelDownloadEntity(
     val status: Int,
     val updatedAtMs: Long,
 )
+
+/** 下载队列的章节行：哪几章被选中、各自进度。 */
+@Entity(tableName = "download_chapter", primaryKeys = ["aid", "cid"])
+data class DownloadChapterEntity(
+    val aid: Int,
+    val cid: Int,
+    val chapterTitle: String,
+    /** 0 等待 / 1 成功 / 2 失败。 */
+    val status: Int,
+    val attempts: Int = 0,
+)
+
+/** 书评（web_cache 之外的轻展示模型不落库，仅 DTO；见 remote/Models）。 */
+@Entity(tableName = "bookshelf_local")
+data class BookshelfLocalEntity(
+    /** 本地「已在书架」标记，详情页书签两态用（远程书架经 CF 页也可更新）。 */
+    @PrimaryKey val aid: Int,
+    val addedAtMs: Long,
+)

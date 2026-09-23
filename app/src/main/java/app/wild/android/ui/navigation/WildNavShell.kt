@@ -160,11 +160,18 @@ private fun WildNavHost(navController: NavHostController) {
             WildRoutes.INIT,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("init") }),
         ) {
-            InitScreen(onFinished = {
-                navController.navigate(WildDestination.HOME.route) {
-                    popUpTo(WildRoutes.INIT) { inclusive = true }
-                }
-            })
+            InitScreen(
+                onFinished = {
+                    navController.navigate(WildDestination.HOME.route) {
+                        popUpTo(WildRoutes.INIT) { inclusive = true }
+                    }
+                },
+                onNeedLogin = {
+                    navController.navigate(WildRoutes.LOGIN) {
+                        popUpTo(WildRoutes.INIT) { inclusive = true }
+                    }
+                },
+            )
         }
         composable(
             WildRoutes.LOGIN,
@@ -203,7 +210,7 @@ private fun WildNavHost(navController: NavHostController) {
         ) {
             HistoryScreen(
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
-                onContinueRead = { h -> navController.navigate(WildRoutes.reader(h.novelId, app.wild.android.data.mock.WildMock.resolveChapterCid(h.novelId, h.chapterTitle))) },
+                onContinueRead = { h -> navController.navigate(WildRoutes.reader(h.novelId, h.chapterId)) },
             )
         }
         composable(

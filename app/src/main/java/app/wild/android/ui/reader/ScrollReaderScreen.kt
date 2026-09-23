@@ -1,7 +1,7 @@
 package app.wild.android.ui.reader
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
@@ -30,7 +29,6 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,17 +38,19 @@ import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -58,13 +58,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
-import app.wild.android.data.mock.WildMock
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.vm.ReaderViewModel
+import coil3.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 private sealed class ParsedBlock {
     data class Text(val content: String) : ParsedBlock()
-    data class Image(val marker: String) : ParsedBlock()
+    data class Image(val url: String) : ParsedBlock()
 }
 
 private fun parseBlocks(content: String): List<ParsedBlock> =
@@ -79,14 +84,21 @@ private fun parseBlocks(content: String): List<ParsedBlock> =
  * HTML 阅读器 `/novel/reader` reader_type=html（spec §2.9）：
  * extendBodyBehindAppBar 半透明 AppBar + 整章 ListView 滚动 + 图片 4:3 contain
  * + 尾部「上一章/下一章」+ 点正文切全屏 + 自动滚动。
+ * Stage 4：目录/正文来自 [ReaderViewModel]（下载 → 缓存 → 网络三级）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
-    val novel = remember(aid) { WildMock.novelInfo(aid) }
-    val volumes = remember(aid) { WildMock.volumes(aid) }
-    val flat = remember(volumes) { volumes.flatMap { v -> v.chapters.map { v.title to it } } }
-    var currentIndex by rememberSaveable { mutableIntStateOf(flat.indexOfFirst { it.second.cid == cid }.coerceAtLeast(0)) }
+fun ScrollReaderScreen(
+    aid: Int,
+    cid: Int,
+    onBack: () -> Unit,
+    vm: ReaderViewModel = koinViewModel(parameters = { parametersOf(aid, cid) }),
+) {
+    LaunchedEffect(Unit) { vm.load() }
+    val st by vm.state.collectAsState()
+    val restore by vm.restoreProgress.collectAsState()
+    val flat = st.flatChapters
+    val currentIndex = st.currentIndex
 
     val dark = when (ReaderSettings.themeMode) {
         ReaderThemeMode.AUTO -> isSystemInDarkTheme()
@@ -116,8 +128,8 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                 val atStart = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
                 val atEnd = last != null && last.index >= listState.layoutInfo.totalItemsCount - 1
-                if (dir > 0 && atEnd && currentIndex < flat.size - 1) currentIndex++
-                if (dir < 0 && atStart && currentIndex > 0) currentIndex--
+                if (dir > 0 && atEnd && currentIndex < flat.size - 1) vm.goTo(currentIndex + 1)
+                if (dir < 0 && atStart && currentIndex > 0) vm.goTo(currentIndex - 1)
             }
         }
         onDispose { ReaderSettings.volumeKeyHandler = null }
@@ -149,15 +161,45 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
         else -> Int.MAX_VALUE.dp
     }
 
-    val content = remember(currentIndex) { WildMock.chapterContent(flat[currentIndex].second.title) }
+    val content = st.content ?: ""
     val blocks = remember(content) { parseBlocks(content) }
+
+    // 历史进度恢复：进入章节后按累计字数锚点滚到对应 block（决策 C；消费一次后清零）
+    LaunchedEffect(restore, content) {
+        if (restore > 0 && content.isNotEmpty() && blocks.isNotEmpty()) {
+            var acc = 0
+            var target = 0
+            for (i in blocks.indices) {
+                val b = blocks[i]
+                if (b is ParsedBlock.Text) acc += b.content.length
+                if (acc >= restore) { target = i; break }
+                target = i
+            }
+            listState.scrollToItem(target)
+            vm.restoreProgress.value = 0
+        }
+    }
+
+    // 进度持久化：首个可见项变化 → 记 累计字数锚点（图片块不计字）
+    LaunchedEffect(blocks) {
+        snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
+            if (st.content != null && blocks.isNotEmpty()) {
+                var acc = 0
+                for (i in 0 until first.coerceAtMost(blocks.size)) {
+                    val b = blocks[i]
+                    if (b is ParsedBlock.Text) acc += b.content.length
+                }
+                vm.record(currentIndex, content, progressAnchor = acc, page = first)
+            }
+        }
+    }
 
     Scaffold(
         containerColor = bg,
         topBar = {
             if (!fullscreen) {
                 TopAppBar(
-                    title = { Text(flat[currentIndex].second.title) },
+                    title = { Text(flat.getOrNull(currentIndex)?.second?.title ?: st.novelName) },
                     navigationIcon = {
                         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
                     },
@@ -205,54 +247,68 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
                     )
                 }
             }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .widthIn(max = contentMaxWidth)
-                    .align(Alignment.Center),
-                contentPadding = PaddingValues(
-                    start = ReaderSettings.leftPadding.dp,
-                    end = ReaderSettings.rightPadding.dp,
-                    top = padding.calculateTopPadding() + ReaderSettings.topBarHeight.dp,
-                    bottom = ReaderSettings.bottomBarHeight.dp,
-                ),
-            ) {
-                itemsIndexed(blocks) { i, block ->
-                    when (block) {
-                        is ParsedBlock.Text -> Text(
-                            block.content,
-                            style = TextStyle(
-                                fontSize = (ReaderSettings.fontSize + if (i == 0) 2f else 0f).sp,
-                                fontWeight = if (i == 0) FontWeight.Bold else null,
-                                lineHeight = ReaderSettings.lineHeight.em,
-                                letterSpacing = 0.5.sp,
-                                color = fg,
-                            ),
-                            modifier = Modifier.padding(bottom = ReaderSettings.paragraphSpacing.dp),
-                        )
-                        is ParsedBlock.Image -> Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(4f / 3f)
-                                .padding(vertical = ReaderSettings.paragraphSpacing.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { MockIllustration(seed = block.marker) }
+            when {
+                st.loading || st.content == null && st.error == null ->
+                    LoadingBlock()
+                st.error != null ->
+                    ErrorBlock(message = st.error!!, onRefresh = { vm.goTo(currentIndex) })
+                else -> LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .widthIn(max = contentMaxWidth)
+                        .align(Alignment.Center),
+                    contentPadding = PaddingValues(
+                        start = ReaderSettings.leftPadding.dp,
+                        end = ReaderSettings.rightPadding.dp,
+                        top = padding.calculateTopPadding() + ReaderSettings.topBarHeight.dp,
+                        bottom = ReaderSettings.bottomBarHeight.dp,
+                    ),
+                ) {
+                    itemsIndexed(blocks) { i, block ->
+                        when (block) {
+                            is ParsedBlock.Text -> Text(
+                                block.content,
+                                style = TextStyle(
+                                    fontSize = (ReaderSettings.fontSize + if (i == 0) 2f else 0f).sp,
+                                    fontWeight = if (i == 0) FontWeight.Bold else null,
+                                    lineHeight = ReaderSettings.lineHeight.em,
+                                    letterSpacing = 0.5.sp,
+                                    color = fg,
+                                ),
+                                modifier = Modifier.padding(bottom = ReaderSettings.paragraphSpacing.dp),
+                            )
+                            is ParsedBlock.Image -> Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(4f / 3f)
+                                    .padding(vertical = ReaderSettings.paragraphSpacing.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                SubcomposeAsyncImage(
+                                    model = block.url,
+                                    contentDescription = "插图",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize(),
+                                    error = { MockIllustration(seed = block.url) },
+                                )
+                            }
+                        }
                     }
-                }
-                item {
-                    Spacer(Modifier.height(32.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        TextButton(
-                            onClick = { if (currentIndex > 0) currentIndex-- },
-                            enabled = currentIndex > 0,
-                        ) { Text("上一章", color = fg) }
-                        TextButton(
-                            onClick = { if (currentIndex < flat.size - 1) currentIndex++ },
-                            enabled = currentIndex < flat.size - 1,
-                        ) { Text("下一章", color = fg) }
+                    item {
+                        Spacer(Modifier.height(32.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            TextButton(
+                                onClick = { if (currentIndex > 0) vm.goTo(currentIndex - 1) },
+                                enabled = currentIndex > 0,
+                            ) { Text("上一章", color = fg) }
+                            TextButton(
+                                onClick = { if (currentIndex < flat.size - 1) vm.goTo(currentIndex + 1) },
+                                enabled = currentIndex < flat.size - 1,
+                            ) { Text("下一章", color = fg) }
+                        }
+                        Spacer(Modifier.height(32.dp))
                     }
-                    Spacer(Modifier.height(32.dp))
                 }
             }
         }
@@ -260,15 +316,15 @@ fun ScrollReaderScreen(aid: Int, cid: Int, onBack: () -> Unit) {
 
     if (showCatalog) {
         ChapterCatalogSheet(
-            volumes = volumes,
-            currentCid = flat[currentIndex].second.cid,
+            volumes = st.volumes,
+            currentCid = flat.getOrNull(currentIndex)?.second?.cid ?: cid,
             heightFraction = 0.8f,
             currentHighlightColor = Color.Transparent, // HTML 阅读器：当前章 primary 色（spec §2.11）
             onDismiss = { showCatalog = false },
             onSelect = { sel ->
                 showCatalog = false
                 val idx = flat.indexOfFirst { it.second.cid == sel }
-                if (idx >= 0) currentIndex = idx
+                if (idx >= 0) vm.goTo(idx)
             },
         )
     }

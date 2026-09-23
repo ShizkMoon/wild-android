@@ -56,7 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import app.wild.android.data.mock.MockVolume
+import app.wild.android.data.remote.Volume
 
 /**
  * 目录弹层（spec §2.11）：普通阅读器 0.9 高可拖拽；HTML 0.8。
@@ -65,7 +65,7 @@ import app.wild.android.data.mock.MockVolume
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChapterCatalogSheet(
-    volumes: List<MockVolume>,
+    volumes: List<Volume>,
     currentCid: Int,
     heightFraction: Float,
     currentHighlightColor: Color,
@@ -107,9 +107,9 @@ fun ChapterCatalogSheet(
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 volumes.forEach { volume ->
-                    item(key = "v-${volume.title}") {
+                    item(key = "v-${volume.name}") {
                         Text(
-                            volume.title,
+                            volume.name,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(16.dp),

@@ -4,7 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -16,9 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Comment
@@ -43,15 +40,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,18 +55,21 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
-import app.wild.android.data.mock.MockNovelInfo
-import app.wild.android.data.mock.MockVolume
-import app.wild.android.data.mock.WildMock
+import app.wild.android.data.remote.NovelInfo
+import app.wild.android.data.remote.Volume
 import app.wild.android.ui.components.CoverImage
-import kotlinx.coroutines.delay
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.vm.NovelInfoViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 /**
  * 小说详情 `/novel/info`（spec §2.7）：
  * AppBar「小说详情」+ [下载钮, 书架书签钮]；头图区 120×160 + 标题/作者(可点)/状态/动画化；
  * 统计行 spaceEvenly（更新/评论）；标签 chips；「继续阅读」通栏钮；简介 + 卷-章 Card。
  * 宽屏限定内容栏宽并居中（MD3 大屏可读性规范）。
+ * Stage 4：info/toc 走 `/book/{aid}.htm` + `index.htm`；书签 = 本地标记 + 远程加/删。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,20 +82,13 @@ fun NovelInfoScreen(
     onTagClick: (String) -> Unit,
     onChapterClick: (Int) -> Unit,
     showBackButton: Boolean = true,
+    vm: NovelInfoViewModel = koinViewModel(parameters = { parametersOf(aid) }),
 ) {
-    var loading by remember { mutableStateOf(true) }
-    var inBookshelf by remember { mutableStateOf(aid % 4 == 0) }
+    val state by vm.state.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
-    androidx.compose.runtime.LaunchedEffect(aid) {
-        delay(350) // mock 加载
-        loading = false
-    }
-
-    val info = remember(aid) { WildMock.novelInfo(aid) }
-    val volumes = remember(aid) { WildMock.volumes(aid) }
-    val history = remember(aid) { WildMock.histories.firstOrNull { it.novelId == aid } }
+    LaunchedEffect(aid) { vm.load() }
 
     Scaffold(
         topBar = {
@@ -110,15 +102,19 @@ fun NovelInfoScreen(
                     }
                 },
                 actions = {
-                    if (!loading) {
+                    if (!state.loading && state.error == null) {
                         IconButton(onClick = onDownload) {
                             Icon(Icons.Outlined.Download, "下载")
                         }
-                        IconButton(onClick = { inBookshelf = !inBookshelf }) {
+                        IconButton(onClick = {
+                            vm.toggleBookshelf { msg ->
+                                scope.launch { snackbar.showSnackbar(msg) }
+                            }
+                        }) {
                             Icon(
-                                if (inBookshelf) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                                if (state.inBookshelf) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
                                 contentDescription = "书架",
-                                tint = if (inBookshelf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                tint = if (state.inBookshelf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
@@ -127,57 +123,70 @@ fun NovelInfoScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        if (loading) {
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+        when {
+            state.loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-        } else {
-            val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
-            val maxWidth = when {
-                sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 720.dp
-                sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 600.dp
-                else -> Int.MAX_VALUE.dp
-            }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                item {
-                    Column(modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth()) {
-                        NovelHeader(info, onAuthorClick)
-                        StatRow(info, onReviews)
-                        TagWrap(info, onTagClick)
-                        if (history != null) {
-                            ContinueReadButton(
-                                chapterTitle = history.chapterTitle,
-                                onClick = { onChapterClick(WildMock.resolveChapterCid(aid, history.chapterTitle)) },
-                            )
-                        }
-                        NovelDescription(info)
-                    }
+            state.info == null && state.error != null ->
+                ErrorBlock(state.error!!, title = "详情加载失败", onRefresh = { vm.load() })
+            else -> {
+                val info = state.info!!
+                val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
+                val maxWidth = when {
+                    sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_EXPANDED_LOWER_BOUND) -> 720.dp
+                    sizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND) -> 600.dp
+                    else -> Int.MAX_VALUE.dp
                 }
-                volumes.forEach { volume ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     item {
-                        Box(
-                            modifier = Modifier
-                                .widthIn(max = maxWidth)
-                                .fillMaxWidth(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            VolumeCard(volume, onChapterClick)
+                        Column(modifier = Modifier.widthIn(max = maxWidth).fillMaxWidth()) {
+                            NovelHeader(info, onAuthorClick)
+                            StatRow(info, onReviews)
+                            TagWrap(info, onTagClick)
+                            val history = state.history
+                            if (history != null || info.lastChapterCid > 0) {
+                                ContinueReadButton(
+                                    chapterTitle = history?.chapterTitle ?: info.lastChapterTitle,
+                                    onClick = { onChapterClick(vm.continueCid()) },
+                                )
+                            }
+                            state.error?.let {
+                                Text(
+                                    "目录加载失败：$it",
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                )
+                            }
+                            NovelDescription(info)
                         }
                     }
+                    state.volumes.forEach { volume ->
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .widthIn(max = maxWidth)
+                                    .fillMaxWidth(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                VolumeCard(volume, onChapterClick)
+                            }
+                        }
+                    }
+                    item { Spacer(Modifier.height(24.dp)) }
                 }
-                item { Spacer(Modifier.height(24.dp)) }
             }
         }
     }
 }
 
 @Composable
-private fun NovelHeader(info: MockNovelInfo, onAuthorClick: (String) -> Unit) {
+private fun NovelHeader(info: NovelInfo, onAuthorClick: (String) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -188,7 +197,7 @@ private fun NovelHeader(info: MockNovelInfo, onAuthorClick: (String) -> Unit) {
                 .width(120.dp)
                 .aspectRatio(120f / 160f)
                 .clip(RoundedCornerShape(8.dp)),
-        ) { CoverImage(info.title) }
+        ) { CoverImage(info.title, info.coverUrl) }
         Spacer(Modifier.width(16.dp))
         Column {
             Text(info.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -211,7 +220,7 @@ private fun NovelHeader(info: MockNovelInfo, onAuthorClick: (String) -> Unit) {
 }
 
 @Composable
-private fun StatRow(info: MockNovelInfo, onReviews: () -> Unit) {
+private fun StatRow(info: NovelInfo, onReviews: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -241,7 +250,7 @@ private fun StatItem(icon: @Composable () -> Unit, text: String, onClick: (() ->
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun TagWrap(info: MockNovelInfo, onTagClick: (String) -> Unit) {
+private fun TagWrap(info: NovelInfo, onTagClick: (String) -> Unit) {
     androidx.compose.foundation.layout.FlowRow(
         modifier = Modifier
             .fillMaxWidth()
@@ -282,7 +291,7 @@ private fun ContinueReadButton(chapterTitle: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun NovelDescription(info: MockNovelInfo) {
+private fun NovelDescription(info: NovelInfo) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -290,18 +299,17 @@ private fun NovelDescription(info: MockNovelInfo) {
     ) {
         Text("简介", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
-        // spec：flutter_html 渲染，body 14sp onSurface；mock 阶段纯文本 + 段落间距
-        HtmlLite(info.introduce)
+        HtmlLite(info.introduceHtml)
     }
 }
 
-/** 简介 HTML 的最小渲染：<p>/<br> 分段，14sp。真实 HTML 渲染在 Stage 4 评估。 */
+/** 简介 HTML 的最小渲染：<p>/<br> 分段，14sp。 */
 @Composable
 fun HtmlLite(html: String, modifier: Modifier = Modifier) {
     val paragraphs = remember(html) {
         html.replace(Regex("<br\\s*/?>"), "\n")
             .split(Regex("</?p[^>]*>"))
-            .map { it.replace(Regex("<[^>]+>"), "").trim() }
+            .map { it.replace(Regex("<[^>]+>"), "").replace("&nbsp;", " ").trim() }
             .filter { it.isNotEmpty() }
     }
     Column(modifier) {
@@ -317,14 +325,14 @@ fun HtmlLite(html: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun VolumeCard(volume: MockVolume, onChapterClick: (Int) -> Unit) {
+private fun VolumeCard(volume: Volume, onChapterClick: (Int) -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(volume.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(volume.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             HorizontalDivider(Modifier.padding(top = 8.dp))
             volume.chapters.forEach { ch ->
                 Row(
@@ -346,6 +354,6 @@ private fun VolumeCard(volume: MockVolume, onChapterClick: (Int) -> Unit) {
 @Composable
 private fun NovelInfoPreview() {
     app.wild.android.ui.theme.WildTheme {
-        NovelInfoScreen(aid = 2, onBack = {}, onReviews = {}, onDownload = {}, onAuthorClick = {}, onTagClick = {}, onChapterClick = {})
+        Text("预览需要 Koin 环境，见真机截图")
     }
 }

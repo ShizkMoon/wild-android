@@ -1,6 +1,7 @@
 package app.wild.android.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Person
@@ -29,45 +31,41 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import app.wild.android.data.mock.WildMock
 import app.wild.android.ui.components.EmptyBlock
-import kotlinx.coroutines.delay
+import app.wild.android.ui.components.ErrorBlock
+import app.wild.android.ui.vm.ReviewsViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
+import org.koin.core.parameter.parametersOf
 
 /**
  * 评论页 `/novel/reviews`（spec §2.12）：AppBar「{书名} - 评论」；
  * 卡片列表（头像占位 + 用户名 + 时间 + 内容），下拉刷新 + 到底自动加载（末项菊花）。
+ * Stage 4：`reviews.php` 真实分页。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
-    val title = remember(aid) { WildMock.novels.firstOrNull { it.aid == aid }?.title ?: "小说" }
-    var reviews by remember { mutableStateOf(WildMock.reviews) }
-    var page by remember { mutableIntStateOf(1) }
-    val maxPage = 3
-    var refreshing by remember { mutableStateOf(false) }
-    var loading by remember { mutableStateOf(true) }
+fun ReviewsScreen(
+    aid: Int,
+    onBack: () -> Unit,
+    vm: ReviewsViewModel = koinViewModel(parameters = { parametersOf(aid) }),
+) {
+    val title by vm.title.collectAsState()
+    val paged by vm.reviews.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var refreshing = paged.loading && paged.items.isNotEmpty()
 
-    LaunchedEffect(aid) {
-        delay(350)
-        loading = false
-    }
+    LaunchedEffect(aid) { vm.load() }
+
     // 到底自动加载（spec：末项菊花 + microtask；Compose 用快照流判距底）
     LaunchedEffect(listState) {
         snapshotFlow {
@@ -75,10 +73,7 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
             info.totalItemsCount > 0 && last >= info.totalItemsCount - 1
         }.collect { atEnd ->
-            if (atEnd && page < maxPage) {
-                page++
-                reviews = reviews + WildMock.reviews
-            }
+            if (atEnd) vm.loadMore()
         }
     }
 
@@ -93,16 +88,16 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
         },
     ) { padding ->
         when {
-            loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-            reviews.isEmpty() -> EmptyBlock("暂无评论", Modifier.padding(padding))
+            paged.loading && paged.items.isEmpty() ->
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+            paged.error != null && paged.items.isEmpty() ->
+                ErrorBlock(paged.error!!, onRefresh = { vm.refresh() })
+            paged.items.isEmpty() -> EmptyBlock("暂无评论", Modifier.padding(padding))
             else -> PullToRefreshBox(
                 isRefreshing = refreshing,
-                onRefresh = {
-                    refreshing = true
-                    scope.launch { delay(500); reviews = WildMock.reviews; page = 1; refreshing = false }
-                },
+                onRefresh = { vm.refresh() },
                 modifier = Modifier.fillMaxSize().padding(padding),
             ) {
                 LazyColumn(
@@ -110,7 +105,7 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    itemsIndexed(reviews) { _, r ->
+                    itemsIndexed(paged.items) { _, r ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -129,7 +124,7 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
                                     }
                                     Spacer(Modifier.size(8.dp))
                                     Column {
-                                        Text(r.uname, style = MaterialTheme.typography.titleMedium)
+                                        Text(r.userName, style = MaterialTheme.typography.titleMedium)
                                         Text(r.time, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
@@ -138,7 +133,7 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
                             }
                         }
                     }
-                    if (page < maxPage) {
+                    if (!paged.endReached) {
                         item {
                             Box(
                                 modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -155,5 +150,5 @@ fun ReviewsScreen(aid: Int, onBack: () -> Unit) {
 @Preview(showBackground = true, widthDp = 360, heightDp = 760)
 @Composable
 private fun ReviewsPreview() {
-    app.wild.android.ui.theme.WildTheme { ReviewsScreen(aid = 2, onBack = {}) }
+    app.wild.android.ui.theme.WildTheme { Text("预览需要 Koin 环境，见真机截图") }
 }

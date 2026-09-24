@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -29,9 +30,11 @@ import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -72,14 +75,24 @@ import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
-private data class DownloadStatusStyle(val label: String, val icon: ImageVector, val color: Color)
+private data class DownloadStatusStyle(
+    val label: String,
+    val icon: ImageVector,
+    val container: Color,
+    val onContainer: Color,
+)
 
-private fun statusStyle(status: Int): DownloadStatusStyle = when (status) {
-    0 -> DownloadStatusStyle("等待下载", Icons.Outlined.Download, Color(0xFF2196F3))
-    1 -> DownloadStatusStyle("下载完成", Icons.Outlined.CheckCircleOutline, Color(0xFF4CAF50))
-    2 -> DownloadStatusStyle("下载失败", Icons.Outlined.ErrorOutline, Color(0xFFF44336))
-    3 -> DownloadStatusStyle("正在删除", Icons.Outlined.DeleteOutline, Color(0xFFFF9800))
-    else -> DownloadStatusStyle("未知", Icons.Outlined.HelpOutline, Color.Gray)
+/** P0-4/S-3：状态语义色一律 *Container/on*Container 配对，不再用 M2 硬编码色板。 */
+@Composable
+private fun statusStyle(status: Int): DownloadStatusStyle {
+    val s = MaterialTheme.colorScheme
+    return when (status) {
+        0 -> DownloadStatusStyle("等待下载", Icons.Outlined.Download, s.secondaryContainer, s.onSecondaryContainer)
+        1 -> DownloadStatusStyle("下载完成", Icons.Outlined.CheckCircleOutline, s.primaryContainer, s.onPrimaryContainer)
+        2 -> DownloadStatusStyle("下载失败", Icons.Outlined.ErrorOutline, s.errorContainer, s.onErrorContainer)
+        3 -> DownloadStatusStyle("正在删除", Icons.Outlined.DeleteOutline, s.tertiaryContainer, s.onTertiaryContainer)
+        else -> DownloadStatusStyle("未知", Icons.Outlined.HelpOutline, s.surfaceVariant, s.onSurfaceVariant)
+    }
 }
 
 /**
@@ -136,14 +149,20 @@ fun DownloadsScreen(
             LazyColumn(
                 Modifier.fillMaxSize().padding(padding),
                 horizontalAlignment = Alignment.CenterHorizontally,
+                contentPadding = PaddingValues(bottom = 24.dp),
             ) {
-                items(downloads) { d ->
+                items(downloads, key = { it.aid }) { d ->
                     val st = statusStyle(d.status)
                     Card(
                         modifier = Modifier
                             .contentColumnWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .clickable { onOpenDetail(d.aid) },
+                            .clickable { onOpenDetail(d.aid) }
+                            .animateItem(),
+                        colors = androidx.compose.material3.CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        ),
+                        border = app.wild.android.ui.theme.CardOutline,
                     ) {
                         Row(Modifier.padding(12.dp)) {
                             Surface(
@@ -155,16 +174,32 @@ fun DownloadsScreen(
                             Spacer(Modifier.width(16.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(d.novelName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(d.author, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(d.author, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.AutoMirrored.Outlined.MenuBook, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("${d.doneChapters}/${d.totalChapters} 章节", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(st.icon, null, tint = st.color, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(st.label, style = MaterialTheme.typography.bodyMedium, color = st.color)
+                                // S-10：下载进度可视化
+                                LinearProgressIndicator(
+                                    progress = {
+                                        if (d.totalChapters > 0) d.doneChapters.toFloat() / d.totalChapters else 0f
+                                    },
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                )
+                                // 状态胶囊：container/onContainer 配对
+                                Surface(
+                                    color = st.container,
+                                    shape = MaterialTheme.shapes.extraSmall,
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    ) {
+                                        Icon(st.icon, null, tint = st.onContainer, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(st.label, style = MaterialTheme.typography.labelMedium, color = st.onContainer)
+                                    }
                                 }
                             }
                         }
@@ -242,14 +277,14 @@ fun DownloadDetailScreen(
                             Spacer(Modifier.height(4.dp))
                             Text("状态：${info?.status ?: ""}", style = MaterialTheme.typography.bodyMedium)
                             Spacer(Modifier.height(8.dp))
-                            // 下载状态胶囊
+                            // 下载状态胶囊：container/onContainer 配对（S-3）
                             Surface(
-                                color = st.color.copy(alpha = 0.1f),
-                                shape = RoundedCornerShape(4.dp),
+                                color = st.container,
+                                shape = MaterialTheme.shapes.extraSmall,
                             ) {
                                 Text(
                                     st.label,
-                                    color = st.color,
+                                    color = st.onContainer,
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -274,14 +309,19 @@ fun DownloadDetailScreen(
                 }
             }
             volumes.forEach { volume ->
-                item {
+                item(key = "v-${volume.volumeId}") {
                     Card(
                         modifier = Modifier
                             .contentColumnWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .animateItem(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        ),
+                        border = app.wild.android.ui.theme.CardOutline,
                     ) {
                         Column(Modifier.padding(16.dp)) {
-                            Text(volume.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(volume.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             androidx.compose.material3.HorizontalDivider(Modifier.padding(top = 8.dp))
                             volume.chapters.forEach { ch ->
                                 val downloaded = ch.cid in doneCids
@@ -297,12 +337,14 @@ fun DownloadDetailScreen(
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = if (downloaded) MaterialTheme.colorScheme.onSurface
                                             else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f),
                                     )
                                     Icon(
                                         if (downloaded) Icons.Outlined.CheckCircleOutline else Icons.Filled.ChevronRight,
                                         null,
-                                        tint = if (downloaded) Color(0xFF4CAF50)
+                                        tint = if (downloaded) MaterialTheme.colorScheme.primary
                                             else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(20.dp),
                                     )

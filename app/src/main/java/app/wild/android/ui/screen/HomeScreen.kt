@@ -1,5 +1,6 @@
 package app.wild.android.ui.screen
 
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.clickable
@@ -189,11 +191,29 @@ private fun HomeTabContent(
     onCategoryClick: (String) -> Unit,
 ) {
     val columns = adaptiveGridColumns()
-    when (tab) {
-        0 -> RecommendTab(vm, onNovelClick, columns)
-        1 -> CategoryTab(vm, onNovelClick, onCategoryClick, columns)
-        2 -> ToplistTab(vm, onNovelClick, columns)
-        3 -> FinishedTab(vm, onNovelClick, columns)
+    // Tab 切换 shared-axis-X（§4.1）：fade + 水平位移 spring
+    androidx.compose.animation.AnimatedContent(
+        targetState = tab,
+        transitionSpec = {
+            (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) +
+                androidx.compose.animation.slideInHorizontally(
+                    androidx.compose.animation.core.spring(
+                        androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                        androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                    ),
+                ) { if (targetState > initialState) it / 8 else -it / 8 })
+                .togetherWith(
+                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)),
+                )
+        },
+        label = "homeTab",
+    ) { t ->
+        when (t) {
+            0 -> RecommendTab(vm, onNovelClick, columns)
+            1 -> CategoryTab(vm, onNovelClick, onCategoryClick, columns)
+            2 -> ToplistTab(vm, onNovelClick, columns)
+            3 -> FinishedTab(vm, onNovelClick, columns)
+        }
     }
 }
 
@@ -223,21 +243,19 @@ private fun PagedGrid(
     }
 }
 
-/** 推荐 tab（spec §2.4）：区块标题(titleLarge bold, 16/16/16/8) + 3 列封面网格。 */
+/** 推荐 tab（spec §2.4）：区块标题(titleLarge bold, 16/16/16/8) + 封面网格。
+ * P0-1：列数随窗口宽度取 [columns]，不再硬编码 3。
+ * M-6：刷新指示绑定 vm 的 loading，加载完成才落下。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns: Int) {
     val state by vm.recommend.collectAsState()
-    var refreshing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.loadRecommend() }
 
     PullToRefreshBox(
-        isRefreshing = refreshing,
-        onRefresh = {
-            refreshing = true
-            vm.loadRecommend(force = true)
-            refreshing = false
-        },
+        isRefreshing = state.loading && state.data != null,
+        onRefresh = { vm.loadRecommend(force = true) },
         modifier = Modifier.fillMaxSize(),
     ) {
         when {
@@ -247,8 +265,9 @@ private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns
             state.data.isNullOrEmpty() ->
                 EmptyBlock("站点公告：本站已正式关闭新书上架，推荐区块为空")
             else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
-                state.data!!.forEach { block ->
-                    item {
+                state.data!!.forEachIndexed { blockIndex, block ->
+                    // 区块标题可能重名，key 带序号防撞（同时隔离 cover-{aid} 之外的锚点）
+                    item(key = "title-$blockIndex-${block.title}") {
                         Text(
                             block.title,
                             style = MaterialTheme.typography.titleLarge,
@@ -256,10 +275,10 @@ private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns
                             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
                         )
                     }
-                    item {
-                        // 每区块固定 3 列 × 2 行的静态网格（spec：shrinkWrap + NeverScrollable）
-                        Column(Modifier.padding(horizontal = 8.dp)) {
-                            block.novels.take(6).chunked(3).forEach { row ->
+                    item(key = "grid-$blockIndex-${block.title}") {
+                        // 每区块固定 N 列 × 2 行的静态网格（列数随窗口宽度，P0-1）
+                        Column(Modifier.padding(horizontal = 12.dp)) {
+                            block.novels.take(columns * 2).chunked(columns).forEach { row ->
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     row.forEach { novel ->
                                         app.wild.android.ui.components.NovelCoverCard(
@@ -268,7 +287,7 @@ private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns
                                             modifier = Modifier.weight(1f),
                                         )
                                     }
-                                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                                 }
                                 androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
                             }
@@ -321,13 +340,15 @@ internal fun CategoryTab(
                 }
             }
             Box {
+                // G-11：分类选择器触控高 ≥48dp
                 Row(
                     modifier = Modifier
                         .padding(start = 8.dp)
+                        .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                         .clickable { menuOpen = true }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -378,13 +399,29 @@ internal fun CategoryTab(
         if (selectedTag == null) {
             EmptyBlock("请选择分类")
         } else {
-            PagedGrid(
-                paged = paged,
-                columns = columns,
-                onNovelClick = onNovelClick,
-                onRefresh = { vm.selectCategory(selectedTag, viewMode) },
-                onLoadMore = { vm.loadMoreCategory() },
-            )
+            // tag/排序切换内容过渡（§4.4）：fade + 水平位移 spring
+            androidx.compose.animation.AnimatedContent(
+                targetState = selectedTag to viewMode,
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) +
+                        androidx.compose.animation.slideInHorizontally(
+                            androidx.compose.animation.core.spring(
+                                androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                androidx.compose.animation.core.Spring.StiffnessMediumLow,
+                            ),
+                        ) { it / 10 })
+                        .togetherWith(androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(160)))
+                },
+                label = "categorySwitch",
+            ) { (tag, mode) ->
+                PagedGrid(
+                    paged = paged,
+                    columns = columns,
+                    onNovelClick = onNovelClick,
+                    onRefresh = { vm.selectCategory(tag, mode) },
+                    onLoadMore = { vm.loadMoreCategory() },
+                )
+            }
         }
     }
 }
@@ -398,9 +435,9 @@ private fun ToplistTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns: 
 
     Column(Modifier.fillMaxSize()) {
         LazyRow(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            // G-10：横向 padding 进 contentPadding，首尾 chip 才能滚到屏幕边
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(TOPLIST_SORTS) { (label, value) ->

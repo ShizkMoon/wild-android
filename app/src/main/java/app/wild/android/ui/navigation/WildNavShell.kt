@@ -2,6 +2,15 @@ package app.wild.android.ui.navigation
 
 import android.content.Intent
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.History
@@ -12,14 +21,18 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaults
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -32,6 +45,9 @@ import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.R
+import app.wild.android.ui.components.LocalCoverClaims
+import app.wild.android.ui.components.LocalNavAnimatedVisibilityScope
+import app.wild.android.ui.components.LocalSharedTransitionScope
 import app.wild.android.ui.reader.PagedReaderScreen
 import app.wild.android.ui.reader.ReaderSettings
 import app.wild.android.ui.reader.ReaderType
@@ -135,6 +151,8 @@ fun WildNavShell(intent: Intent? = null) {
         else -> NavigationSuiteType.NavigationBar
     }
 
+    // §3.3⑤：导航件容器走 surfaceContainer token，与内容 surface 分层
+    val scheme = MaterialTheme.colorScheme
     NavigationSuiteScaffold(
         navigationSuiteItems = {
             WildDestination.entries.forEach { dest ->
@@ -161,21 +179,53 @@ fun WildNavShell(intent: Intent? = null) {
             }
         },
         layoutType = navSuiteType,
+        navigationSuiteColors = NavigationSuiteDefaults.colors(
+            navigationBarContainerColor = scheme.surfaceContainer,
+            navigationRailContainerColor = scheme.surfaceContainer,
+        ),
+        containerColor = scheme.surface,
     ) {
         WildNavHost(navController)
     }
 }
 
+/**
+ * 每个 `composable` 目的地内容的作用域注入包装：
+ * navigation-compose 2.9.4 没有 sharedElement 参数，把 AnimatedContentScope 经
+ * [LocalNavAnimatedVisibilityScope] 下沉，屏内共享元素修饰符自取（M-2）。
+ */
+@Composable
+private fun AnimatedContentScope.NavScope(content: @Composable () -> Unit) {
+    // 每个目的地一份封面认领集：转场期源屏/目标屏同时组合，隔离两侧互不吃 key
+    CompositionLocalProvider(
+        LocalNavAnimatedVisibilityScope provides this,
+        LocalCoverClaims provides remember { mutableSetOf() },
+    ) {
+        content()
+    }
+}
+
+/** M-1：全局空间转场——前进 slide-in 右入 + fade，回退镜像；位移 spring 无 overshoot。 */
+private val NavSpring = spring<androidx.compose.ui.unit.IntOffset>(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow)
+
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun WildNavHost(navController: NavHostController) {
-    NavHost(
-        navController = navController,
-        startDestination = WildRoutes.INIT,
-    ) {
+    // M-2：SharedTransitionLayout 包 NavHost，作用域经 Local 下沉到各屏
+    SharedTransitionLayout {
+        CompositionLocalProvider(LocalSharedTransitionScope provides this) {
+        NavHost(
+            navController = navController,
+            startDestination = WildRoutes.INIT,
+            enterTransition = { slideInHorizontally(NavSpring) { it / 4 } + fadeIn() },
+            exitTransition = { fadeOut() },
+            popEnterTransition = { fadeIn() },
+            popExitTransition = { slideOutHorizontally(NavSpring) { it / 4 } + fadeOut() },
+        ) {
         composable(
             WildRoutes.INIT,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("init") }),
-        ) {
+        ) { NavScope {
             InitScreen(
                 onFinished = {
                     navController.navigate(WildDestination.HOME.route) {
@@ -188,22 +238,22 @@ private fun WildNavHost(navController: NavHostController) {
                     }
                 },
             )
-        }
+        } }
         composable(
             WildRoutes.LOGIN,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("login") }),
-        ) {
+        ) { NavScope {
             LoginScreen(onLoginSuccess = {
                 navController.navigate(WildDestination.HOME.route) {
                     popUpTo(0) { inclusive = true }
                 }
             })
-        }
+        } }
 
         composable(
             WildDestination.HOME.route,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("home") }),
-        ) {
+        ) { NavScope {
             HomeScreen(
                 onSearchClick = { navController.navigate(WildRoutes.search()) },
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
@@ -213,39 +263,39 @@ private fun WildNavHost(navController: NavHostController) {
                 onAuthorClick = { author -> navController.navigate(WildRoutes.search("author", author)) },
                 onChapterClick = { aid, cid -> navController.navigate(WildRoutes.reader(aid, cid)) },
             )
-        }
+        } }
         composable(
             WildDestination.BOOKSHELF.route,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("bookshelf") }),
-        ) {
+        ) { NavScope {
             BookshelfScreen(onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) })
-        }
+        } }
         composable(
             WildDestination.HISTORY.route,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("history") }),
-        ) {
+        ) { NavScope {
             HistoryScreen(
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
                 onContinueRead = { h -> navController.navigate(WildRoutes.reader(h.novelId, h.chapterId)) },
             )
-        }
+        } }
         composable(
             WildDestination.MORE.route,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("more") }),
-        ) {
+        ) { NavScope {
             MoreScreen(
                 onDownloads = { navController.navigate(WildRoutes.DOWNLOADS) },
                 onAccount = { navController.navigate(WildRoutes.ACCOUNT) },
                 onSettings = { navController.navigate(WildRoutes.SETTINGS) },
                 onAbout = { navController.navigate(WildRoutes.ABOUT) },
             )
-        }
+        } }
 
         composable(
             WildRoutes.NOVEL,
             arguments = listOf(navArgument("aid") { type = NavType.IntType }),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("novel/{aid}") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             val aid = entry.arguments?.getInt("aid") ?: 0
             NovelInfoScreen(
                 aid = aid,
@@ -256,27 +306,27 @@ private fun WildNavHost(navController: NavHostController) {
                 onTagClick = { tag -> navController.navigate(WildRoutes.category(tag)) },
                 onChapterClick = { cid -> navController.navigate(WildRoutes.reader(aid, cid)) },
             )
-        }
+        } }
         composable(
             WildRoutes.REVIEWS,
             arguments = listOf(navArgument("aid") { type = NavType.IntType }),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("novel/{aid}/reviews") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             ReviewsScreen(
                 aid = entry.arguments?.getInt("aid") ?: 0,
                 onBack = { navController.popBackStack() },
             )
-        }
+        } }
         composable(
             WildRoutes.DOWNLOAD_SELECT,
             arguments = listOf(navArgument("aid") { type = NavType.IntType }),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("novel/{aid}/download-select") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             DownloadSelectScreen(
                 aid = entry.arguments?.getInt("aid") ?: 0,
                 onBack = { navController.popBackStack() },
             )
-        }
+        } }
         composable(
             WildRoutes.READER,
             arguments = listOf(
@@ -284,7 +334,7 @@ private fun WildNavHost(navController: NavHostController) {
                 navArgument("cid") { type = NavType.IntType },
             ),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("reader/{aid}/{cid}") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             val aid = entry.arguments?.getInt("aid") ?: 0
             val cid = entry.arguments?.getInt("cid") ?: 0
             // spec：阅读器类型在路由层分流（reader_type）
@@ -298,7 +348,7 @@ private fun WildNavHost(navController: NavHostController) {
                     onBack = { navController.popBackStack() },
                 )
             }
-        }
+        } }
         composable(
             WildRoutes.SEARCH,
             arguments = listOf(
@@ -306,63 +356,63 @@ private fun WildNavHost(navController: NavHostController) {
                 navArgument("key") { defaultValue = "" },
             ),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("search?type={type}&key={key}") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             SearchScreen(
                 initialType = entry.arguments?.getString("type").orEmpty(),
                 initialKey = entry.arguments?.getString("key").orEmpty(),
                 onBack = { navController.popBackStack() },
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
             )
-        }
+        } }
         composable(
             WildRoutes.CATEGORY,
             arguments = listOf(navArgument("tag") { defaultValue = "" }),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("category?tag={tag}") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             CategoryScreen(
                 initialTag = entry.arguments?.getString("tag").orEmpty(),
                 showAppBar = true,
                 onBack = { navController.popBackStack() },
                 onNovelClick = { aid -> navController.navigate(WildRoutes.novel(aid)) },
             )
-        }
+        } }
         composable(
             WildRoutes.SETTINGS,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("settings") }),
-        ) {
+        ) { NavScope {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onLogout = {
                     navController.navigate(WildRoutes.LOGIN) { popUpTo(0) { inclusive = true } }
                 },
             )
-        }
+        } }
         composable(
             WildRoutes.ACCOUNT,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("account") }),
-        ) {
+        ) { NavScope {
             AccountScreen(onBack = { navController.popBackStack() })
-        }
+        } }
         composable(
             WildRoutes.ABOUT,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("about") }),
-        ) {
+        ) { NavScope {
             AboutScreen(onBack = { navController.popBackStack() })
-        }
+        } }
         composable(
             WildRoutes.DOWNLOADS,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("downloads") }),
-        ) {
+        ) { NavScope {
             DownloadsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenDetail = { aid -> navController.navigate(WildRoutes.downloadDetail(aid)) },
             )
-        }
+        } }
         composable(
             WildRoutes.DOWNLOAD_DETAIL,
             arguments = listOf(navArgument("aid") { type = NavType.IntType }),
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("download/{aid}") }),
-        ) { entry ->
+        ) { entry -> NavScope {
             DownloadDetailScreen(
                 aid = entry.arguments?.getInt("aid") ?: 0,
                 onBack = { navController.popBackStack() },
@@ -371,12 +421,14 @@ private fun WildNavHost(navController: NavHostController) {
                     navController.navigate(WildRoutes.reader(entry.arguments?.getInt("aid") ?: 0, cid))
                 },
             )
-        }
+        } }
         composable(
             WildRoutes.CF_VERIFY,
             deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("cf-verify") }),
-        ) {
+        ) { NavScope {
             CfVerifyScreen(onBack = { navController.popBackStack() })
+        } }
+        }
         }
     }
 }

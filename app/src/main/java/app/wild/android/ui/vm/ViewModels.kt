@@ -324,6 +324,11 @@ class SearchViewModel(
             loadPage(results, cur.page, { p -> source.search(queryType, queryKey, p) }, { it })
         }
     }
+
+    /** P2：搜索历史管理入口——清空。 */
+    fun clearHistory() {
+        viewModelScope.launch { library.clearSearchHistory() }
+    }
 }
 
 // ===================== 书架 =====================
@@ -403,6 +408,17 @@ class BookshelfViewModel(
 class HistoryViewModel(private val library: LibraryRepository) : ViewModel() {
     val history: StateFlow<List<ReadingHistoryEntity>> =
         library.readingHistory.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** P0-2：下拉刷新绑定真实重查（历史为本地库，重查 DAO 拿到最新快照）。 */
+    val refreshing = MutableStateFlow(false)
+
+    fun refresh() {
+        viewModelScope.launch {
+            refreshing.value = true
+            runCatching { library.readingHistory.first() }
+            refreshing.value = false
+        }
+    }
 
     fun delete(entry: ReadingHistoryEntity) {
         viewModelScope.launch { library.removeReading(entry) }

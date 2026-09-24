@@ -3,8 +3,11 @@ package app.wild.android.ui.screen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,9 +31,11 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,7 +79,7 @@ fun SearchScreen(
     val paged by vm.results.collectAsState()
 
     // 深链带参直接搜
-    androidx.compose.runtime.LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) {
         if (initialKey.isNotBlank()) {
             submitted = true
             vm.search(if (initialType == "author") "author" else "articlename", initialKey)
@@ -89,28 +95,39 @@ fun SearchScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
                 },
-                actions = {
-                    SingleChoiceSegmentedButtonRow {
-                        listOf("书名" to "articlename", "作者" to "author").forEachIndexed { i, (label, value) ->
-                            SegmentedButton(
-                                selected = searchType == value,
-                                onClick = { searchType = value; input = ""; submitted = false },
-                                shape = SegmentedButtonDefaults.itemShape(index = i, count = 2),
-                                icon = {},
-                            ) { Text(label) }
-                        }
-                    }
-                    androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
-                },
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding), horizontalAlignment = Alignment.CenterHorizontally) {
+        // G-7：键盘弹出时顶起输入框
+        Column(
+            Modifier.fillMaxSize().padding(padding).imePadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // 类型切换移到内容顶部通栏（AppBar actions 里放不下语义完整的控件）
+            SingleChoiceSegmentedButtonRow(
+                Modifier.contentColumnWidth().padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth(),
+            ) {
+                listOf("书名" to "articlename", "作者" to "author").forEachIndexed { i, (label, value) ->
+                    SegmentedButton(
+                        selected = searchType == value,
+                        onClick = { searchType = value; input = ""; submitted = false },
+                        shape = SegmentedButtonDefaults.itemShape(index = i, count = 2),
+                        icon = {},
+                    ) { Text(label) }
+                }
+            }
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
                 placeholder = { Text("搜索小说或作者") },
                 leadingIcon = { Icon(Icons.Filled.Search, null) },
+                trailingIcon = {
+                    if (input.isNotEmpty()) {
+                        IconButton(onClick = { input = ""; submitted = false }) {
+                            Icon(Icons.Filled.Close, "清空")
+                        }
+                    }
+                },
                 singleLine = true,
                 shape = RoundedCornerShape(8.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -132,7 +149,21 @@ fun SearchScreen(
                         contentPadding = PaddingValues(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        items(histories) { h ->
+                        item(key = "history-header") {
+                            Row(
+                                modifier = Modifier.contentColumnWidth().fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "搜索历史",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { vm.clearHistory() }) { Text("清空") }
+                            }
+                        }
+                        items(histories, key = { "${it.searchType}:${it.searchKey}" }) { h ->
                             val isName = h.searchType == "articlename"
                             val accent = if (isName) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
                             ListItem(
@@ -144,7 +175,7 @@ fun SearchScreen(
                                     )
                                 },
                                 headlineContent = {
-                                    Text(h.searchKey, color = accent)
+                                    Text(h.searchKey, color = accent, maxLines = 1)
                                 },
                                 supportingContent = {
                                     Text(if (isName) "书名搜索" else "作者搜索", style = MaterialTheme.typography.bodySmall)
@@ -156,7 +187,8 @@ fun SearchScreen(
                                         searchType = h.searchType
                                         submitted = true
                                         vm.search(h.searchType, h.searchKey)
-                                    },
+                                    }
+                                    .animateItem(),
                             )
                         }
                     }

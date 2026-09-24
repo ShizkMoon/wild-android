@@ -1,5 +1,7 @@
 package app.wild.android.ui.screen
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -27,14 +29,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MoveToInbox
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -136,17 +137,18 @@ fun BookshelfScreen(
                             IconButton(onClick = { showTip = true }) {
                                 Icon(Icons.Outlined.Info, "书架容量")
                             }
+                            // P2：SelectAll 语义错位 → Checklist（「进入多选」）
                             IconButton(onClick = { selecting = true }, enabled = items.isNotEmpty()) {
-                                Icon(Icons.Outlined.SelectAll, "多选")
+                                Icon(Icons.Outlined.Checklist, "多选")
                             }
                         }
                     },
                 )
                 // 书架分类 FilterChip 横滑条（spec §2.5 bottom）
+                // G-10：横向 padding 进 contentPadding，首尾 chip 可滚到屏幕边
                 LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(state.classes.size) { i ->
@@ -166,10 +168,11 @@ fun BookshelfScreen(
             state.loading -> LoadingBlock(Modifier.padding(padding))
             state.needLogin -> EmptyBlock("书架需要登录后使用", Modifier.padding(padding))
             state.error != null && items.isEmpty() ->
-                ErrorBlock(state.error!!, onRefresh = { vm.load() })
+                ErrorBlock(state.error!!, onRefresh = { vm.load() }, modifier = Modifier.padding(padding))
             items.isEmpty() -> EmptyBlock("书架为空", Modifier.padding(padding))
             else -> PullToRefreshBox(
-                isRefreshing = false,
+                // M-6：刷新指示绑定 VM loading，加载完成才落下
+                isRefreshing = state.loading,
                 onRefresh = { vm.loadClass(state.classIndex) },
                 modifier = Modifier
                     .fillMaxSize()
@@ -178,13 +181,17 @@ fun BookshelfScreen(
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(adaptiveGridColumns()),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp),
+                    contentPadding = PaddingValues(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(items.size) { i ->
+                    items(items.size, key = { items[it].bid }) { i ->
                         val book = items[i]
-                        Box {
+                        Box(Modifier.animateItem(
+                            fadeInSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                            placementSpec = spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow),
+                            fadeOutSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                        )) {
                             NovelCoverCard(
                                 NovelCover(book.aid, book.title, book.coverUrl),
                                 aspect = BOOKSHELF_ASPECT,
@@ -198,31 +205,44 @@ fun BookshelfScreen(
                                     }
                                 },
                             )
-                            if (selecting) {
+                            // G-12/S-4/M-10：圆勾 48dp 触控热区 + scheme 色 + 进出动画
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = selecting,
+                                enter = androidx.compose.animation.fadeIn() +
+                                    androidx.compose.animation.scaleIn(),
+                                exit = androidx.compose.animation.fadeOut() +
+                                    androidx.compose.animation.scaleOut(),
+                                modifier = Modifier.align(Alignment.TopEnd),
+                            ) {
                                 val isSelected = book.bid in selected
-                                Surface(
+                                Box(
                                     modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(8.dp)
-                                        .size(24.dp)
-                                        .clip(CircleShape)
+                                        .size(48.dp)
                                         .clickable {
                                             selected =
                                                 if (isSelected) selected - book.bid
                                                 else selected + book.bid
                                         },
-                                    shape = CircleShape,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,
-                                    border = if (isSelected) null else
-                                        androidx.compose.foundation.BorderStroke(2.dp, Color.Gray),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    if (isSelected) {
-                                        Icon(
-                                            Icons.Filled.Check,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.padding(4.dp).size(16.dp),
-                                        )
+                                    Surface(
+                                        modifier = Modifier.size(24.dp),
+                                        shape = CircleShape,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        border = if (isSelected) null else
+                                            androidx.compose.foundation.BorderStroke(
+                                                2.dp, MaterialTheme.colorScheme.outline,
+                                            ),
+                                    ) {
+                                        if (isSelected) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = "已选中",
+                                                tint = MaterialTheme.colorScheme.onPrimary,
+                                                modifier = Modifier.padding(4.dp).size(16.dp),
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -298,9 +318,9 @@ fun HistoryScreen(
     vm: HistoryViewModel = koinViewModel(),
 ) {
     val histories by vm.history.collectAsState()
+    val refreshing by vm.refreshing.collectAsState()
     var showClearDialog by remember { mutableStateOf(false) }
     var deleteTarget by remember { mutableStateOf<ReadingHistoryEntity?>(null) }
-    var refreshing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
@@ -322,19 +342,27 @@ fun HistoryScreen(
             EmptyBlock("暂无阅读历史", Modifier.padding(padding))
         } else {
             PullToRefreshBox(
+                // P0-2/M-6：绑定 VM refresh() 的真实异步状态（重查历史 DAO）
                 isRefreshing = refreshing,
-                onRefresh = { refreshing = true; refreshing = false },
+                onRefresh = { vm.refresh() },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
             ) {
                 LazyColumn(
                     Modifier.fillMaxSize(),
+                    // G-15：末项底部余量
+                    contentPadding = PaddingValues(bottom = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    items(histories) { h ->
+                    items(histories, key = { it.novelId }) { h ->
                         Card(
                             modifier = Modifier
+                                .animateItem(
+                                    fadeInSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                                    placementSpec = spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow),
+                                    fadeOutSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                                )
                                 .contentColumnWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp),
                         ) {
@@ -453,6 +481,7 @@ fun MoreScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Column(Modifier.contentColumnWidth()) {
+                // P2：去掉 ChevronRight（iOS 语汇），M3 列表项靠标题 + leading icon 即可点击
                 listOf(
                     Triple("下载", Icons.Outlined.Download, onDownloads),
                     Triple("账户", Icons.Outlined.Person, onAccount),
@@ -462,7 +491,6 @@ fun MoreScreen(
                     ListItem(
                         leadingContent = { Icon(icon, null) },
                         headlineContent = { Text(label) },
-                        trailingContent = { Icon(Icons.Filled.ChevronRight, null) },
                         modifier = Modifier.clickable(onClick = action),
                     )
                 }

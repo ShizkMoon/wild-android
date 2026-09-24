@@ -74,6 +74,7 @@ class SessionRepository(
     private val client: Wenku8Client,
     private val source: Wenku8DataSource,
     private val signLogDao: SignLogDao,
+    private val cfSession: app.wild.android.data.remote.CfSession,
 ) {
     suspend fun isLoggedIn(): Boolean = db.cookieDao().isLoggedIn()
 
@@ -105,6 +106,9 @@ class SessionRepository(
         }
     }
 
-    /** 退出登录 = 清空 cookie（含 cf_clearance；本地历史/下载不动）。 */
-    suspend fun signOut() = client.clearCookies()
+    /** 退出登录 = 清空 cookie（含 cf_clearance 与 WebView 侧；本地历史/下载不动）。 */
+    suspend fun signOut() {
+        client.clearCookies()
+        cfSession.reset()
+    }
 }

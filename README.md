@@ -62,7 +62,7 @@ app/src/main/java/app/wild/android/
 │   ├── local/               # Room：Entities + Daos + WildDatabase（对齐 spec §3.5）
 │   ├── prefs/SettingsStore.kt   # DataStore（主题模式 / API Host / 阅读器设置）
 │   ├── remote/              # Wenku8DataSource 接口 + Wenku8HtmlSource(Jsoup)
-│   │                        #   + Wenku8Client(OkHttp/cookie/接口缓存) + CfBypass
+│   │                        #   + Wenku8Client(OkHttp/cookie/接口缓存) + CfSession(CF状态机)
 │   ├── download/            # DownloadEngine（章级状态机 + filesDir 落盘）
 │   └── repository/          # LibraryRepository / SessionRepository / ReaderContentSource
 └── ui/

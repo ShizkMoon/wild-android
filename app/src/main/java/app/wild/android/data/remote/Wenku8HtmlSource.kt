@@ -24,10 +24,10 @@ import java.util.Base64
  */
 class Wenku8HtmlSource(
     private val client: Wenku8Client,
-    private val cf: CfBypass? = null,
+    private val cf: CfSession? = null,
 ) : Wenku8DataSource {
 
-    /** CF 守卫：CfBypass 未注入（测试场景）时直接执行。
+    /** CF 守卫：CfSession 未注入（测试场景）时直接执行。
      *  注意必须在 IO 上下文跑：guard 内 `withContext(Main)` 需要主线程空闲，
      *  若在 Main 上调用会自我死锁（主线程等 IO、IO 等主线程）。 */
     private suspend fun <T> guard(block: suspend () -> T): T =
@@ -35,12 +35,21 @@ class Wenku8HtmlSource(
             if (cf == null) block() else cf.guard(block)
         }
 
-    /** 接口缓存读（TTL：index 10min、其余 1h；spec §3.5）。 */
+    /** 接口缓存读（TTL：index 10min、其余 1h；spec §3.5）。
+     *  CF 重试仍被拦时降级「可见 WebView 直接取 HTML」兜底（方案 §8 第三级）。 */
     private suspend fun cached(path: String, ttlMs: Long): String =
-        guard { client.getCached(path, ttlMs) }
+        try {
+            guard { client.getCached(path, ttlMs) }
+        } catch (e: CfChallengeException) {
+            cf?.fetchHtmlViaWebView(path) ?: throw e
+        }
 
     private suspend fun fetch(path: String, referer: String? = null): String =
-        guard { client.get(path, referer) }
+        try {
+            guard { client.get(path, referer) }
+        } catch (e: CfChallengeException) {
+            cf?.fetchHtmlViaWebView(path) ?: throw e
+        }
 
     companion object {
         private const val TTL_INDEX = 10L * 60 * 1000
@@ -57,7 +66,8 @@ class Wenku8HtmlSource(
     // ===================== 会话 / 账户 =====================
 
     override suspend fun initSession(): Result<Unit> = runCatching {
-        client.initSession()
+        // 经 cfSession 预热：`/` 与 `/login.php` 命中挑战也能先解再种（RC-3 修复）。
+        if (cf == null) client.initSession() else cf.ensureWarmed()
     }
 
     override suspend fun login(
@@ -65,16 +75,18 @@ class Wenku8HtmlSource(
         password: String,
         checkcode: String,
     ): Result<Unit> = runCatching {
-        val body = client.post(
-            "/login.php",
-            mapOf(
-                "username" to username,
-                "password" to password,
-                "checkcode" to checkcode,
-                "usecookie" to "315360000",
-                "action" to "login",
-            ),
-        )
+        val body = guard {
+            client.post(
+                "/login.php",
+                mapOf(
+                    "username" to username,
+                    "password" to password,
+                    "checkcode" to checkcode,
+                    "usecookie" to "315360000",
+                    "action" to "login",
+                ),
+            )
+        }
         if (!body.contains("登录成功")) {
             // 服务端把失败原因打在 .blockcontent / 正文里，提取一段友好文案
             val doc = Jsoup.parse(body)
@@ -86,7 +98,7 @@ class Wenku8HtmlSource(
     }
 
     override suspend fun checkcodeImage(): Result<ByteArray> = runCatching {
-        client.getBytes("/checkcode.php?random=${System.currentTimeMillis()}")
+        guard { client.getBytes("/checkcode.php?random=${System.currentTimeMillis()}") }
     }
 
     override suspend fun userDetail(): Result<Map<String, String>> = runCatching {
@@ -98,14 +110,16 @@ class Wenku8HtmlSource(
         // XML API 已死（api.php 恒回 "0"）；保留调用以维持语义，失败容忍由上层处理。
         val request = Base64.getEncoder()
             .encodeToString("action=block&do=sign".toByteArray(Charsets.UTF_8))
-        client.post(
-            "https://app.wenku8.com/api.php",
-            mapOf(
-                "request" to request,
-                "appver" to "1.21",
-                "timestamp" to (System.currentTimeMillis() / 1000).toString(),
-            ),
-        )
+        guard {
+            client.post(
+                "https://app.wenku8.com/api.php",
+                mapOf(
+                    "request" to request,
+                    "appver" to "1.21",
+                    "timestamp" to (System.currentTimeMillis() / 1000).toString(),
+                ),
+            )
+        }
     }
 
     // ===================== 浏览 =====================
@@ -182,7 +196,7 @@ class Wenku8HtmlSource(
     // ===================== 书架 =====================
 
     override suspend fun bookshelfClasses(): Result<List<BookshelfClass>> = runCatching {
-        guard { client.initSession() } // spec：先种 session cookie 提高通过率
+        if (cf != null) cf.ensureWarmed() else client.initSession() // spec：先种 session cookie 提高通过率
         val html = fetch("/modules/article/bookcase.php?charset=gbk")
         Jsoup.parse(html).select("select[name=classlist] option").map { opt ->
             BookshelfClass(
@@ -201,27 +215,39 @@ class Wenku8HtmlSource(
     }
 
     override suspend fun bookshelfAdd(aid: Int): Result<Unit> = runCatching {
-        val resp = client.getResponse(
-            "/modules/article/addbookcase.php?bid=$aid&charset=gbk",
-            referer = client.apiHost() + "/book/$aid.htm",
-        )
-        resp.use { r ->
-            when {
-                r.code == 302 || r.code == 301 -> Unit // 成功 → 重定向到书架页
-                Wenku8Client.isCfChallenge(r.code, "") ->
-                    throw CfChallengeException("/modules/article/addbookcase.php")
-                !r.isSuccessful ->
-                    throw Wenku8HttpException(r.code, "加入书架失败 HTTP ${r.code}")
-                else -> {
-                    val text = Wenku8Client.decodeGbk(r.body.bytes())
-                    if (Wenku8Client.isCfChallenge(r.code, text)) {
-                        throw CfChallengeException("/modules/article/addbookcase.php")
+        guard {
+            client.getResponse(
+                "/modules/article/addbookcase.php?bid=$aid&charset=gbk",
+                referer = client.apiHost() + "/book/$aid.htm",
+            ).use { r ->
+                when {
+                    Wenku8Client.isLoginRedirect(r, "/modules/article/addbookcase.php") ->
+                        throw NeedLoginException("/modules/article/addbookcase.php")
+                    r.code in 301..303 -> Unit // 真成功 → 重定向到书架页
+                    !r.isSuccessful -> {
+                        val text = Wenku8Client.decodeGbk(r.body.bytes())
+                        if (Wenku8Client.isCfChallenge(r.code, text)) {
+                            throw CfChallengeException(
+                                "/modules/article/addbookcase.php",
+                                hardBlock = Wenku8Client.isCfHardBlock(r.code, text),
+                            )
+                        }
+                        throw Wenku8HttpException(r.code, "加入书架失败 HTTP ${r.code}")
                     }
-                    if (!text.contains("处理成功") && !text.contains("已经在您的书架")) {
-                        val doc = Jsoup.parse(text)
-                        val msg = doc.select(".blockcontent").first()?.text()?.trim()
-                            ?: text.take(300)
-                        throw Wenku8HttpException(200, "加入书架失败：$msg")
+                    else -> {
+                        val text = Wenku8Client.decodeGbk(r.body.bytes())
+                        if (Wenku8Client.isCfChallenge(r.code, text)) {
+                            throw CfChallengeException(
+                                "/modules/article/addbookcase.php",
+                                hardBlock = Wenku8Client.isCfHardBlock(r.code, text),
+                            )
+                        }
+                        if (!text.contains("处理成功") && !text.contains("已经在您的书架")) {
+                            val doc = Jsoup.parse(text)
+                            val msg = doc.select(".blockcontent").first()?.text()?.trim()
+                                ?: text.take(300)
+                            throw Wenku8HttpException(200, "加入书架失败：$msg")
+                        }
                     }
                 }
             }
@@ -229,13 +255,27 @@ class Wenku8HtmlSource(
     }
 
     override suspend fun bookshelfRemove(bid: Int): Result<Unit> = runCatching {
-        val resp = client.getResponse(
-            "/modules/article/bookcase.php?delid=$bid&charset=gbk",
-            referer = client.apiHost() + "/modules/article/bookcase.php",
-        )
-        resp.use { r ->
-            if (r.code == 302 || r.code == 301 || r.isSuccessful) Unit
-            else throw Wenku8HttpException(r.code, "移出书架失败 HTTP ${r.code}")
+        guard {
+            client.getResponse(
+                "/modules/article/bookcase.php?delid=$bid&charset=gbk",
+                referer = client.apiHost() + "/modules/article/bookcase.php",
+            ).use { r ->
+                when {
+                    Wenku8Client.isLoginRedirect(r, "/modules/article/bookcase.php") ->
+                        throw NeedLoginException("/modules/article/bookcase.php")
+                    r.code in 301..303 -> Unit
+                    !r.isSuccessful -> {
+                        val text = Wenku8Client.decodeGbk(r.body.bytes())
+                        if (Wenku8Client.isCfChallenge(r.code, text)) {
+                            throw CfChallengeException(
+                                "/modules/article/bookcase.php",
+                                hardBlock = Wenku8Client.isCfHardBlock(r.code, text),
+                            )
+                        }
+                        throw Wenku8HttpException(r.code, "移出书架失败 HTTP ${r.code}")
+                    }
+                }
+            }
         }
     }
 
@@ -244,23 +284,35 @@ class Wenku8HtmlSource(
         sourceClassId: Int,
         targetClassId: Int,
     ): Result<Unit> = runCatching {
-        val form = linkedMapOf<String, String>()
-        // checkid[] 多值：FormBody 需要重复 key —— client.post 用 Map 无法表达，
-        // 这里改用原始 postResponse 手工构造。
-        val resp = client.postMultiValue(
-            "/modules/article/bookcase.php",
-            buildList {
-                bids.forEach { add("checkid[]" to it.toString()) }
-                add("classlist" to sourceClassId.toString())
-                add("checkall" to "checkall")
-                add("newclassid" to targetClassId.toString())
-                add("classid" to sourceClassId.toString())
-            },
-            referer = client.apiHost() + "/modules/article/bookcase.php",
-        )
-        resp.use { r ->
-            if (r.code == 302 || r.code == 301 || r.isSuccessful) Unit
-            else throw Wenku8HttpException(r.code, "书架操作失败 HTTP ${r.code}")
+        val pairs = buildList {
+            bids.forEach { add("checkid[]" to it.toString()) }
+            add("classlist" to sourceClassId.toString())
+            add("checkall" to "checkall")
+            add("newclassid" to targetClassId.toString())
+            add("classid" to sourceClassId.toString())
+        }
+        guard {
+            client.postMultiValue(
+                "/modules/article/bookcase.php",
+                pairs,
+                referer = client.apiHost() + "/modules/article/bookcase.php",
+            ).use { r ->
+                when {
+                    Wenku8Client.isLoginRedirect(r, "/modules/article/bookcase.php") ->
+                        throw NeedLoginException("/modules/article/bookcase.php")
+                    r.code in 301..303 || r.isSuccessful -> {
+                        // 200 也可能是挑战页/错误页：粗查 body 再判成功
+                        val text = Wenku8Client.decodeGbk(r.body.bytes())
+                        if (Wenku8Client.isCfChallenge(r.code, text)) {
+                            throw CfChallengeException(
+                                "/modules/article/bookcase.php",
+                                hardBlock = Wenku8Client.isCfHardBlock(r.code, text),
+                            )
+                        }
+                    }
+                    else -> throw Wenku8HttpException(r.code, "书架操作失败 HTTP ${r.code}")
+                }
+            }
         }
     }
 

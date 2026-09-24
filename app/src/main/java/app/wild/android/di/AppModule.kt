@@ -3,7 +3,7 @@ package app.wild.android.di
 import app.wild.android.data.download.DownloadEngine
 import app.wild.android.data.local.WildDatabase
 import app.wild.android.data.prefs.SettingsStore
-import app.wild.android.data.remote.CfBypass
+import app.wild.android.data.remote.CfSession
 import app.wild.android.data.remote.Wenku8Client
 import app.wild.android.data.remote.Wenku8DataSource
 import app.wild.android.data.remote.Wenku8HtmlSource
@@ -42,14 +42,14 @@ val appModule = module {
 
     // ---- 数据通道（spec §3） ----
     single { Wenku8Client(androidContext(), get(), get(), get()) }
-    single { CfBypass(get()) }
+    single { CfSession(get()) }
     single<Wenku8DataSource> { Wenku8HtmlSource(get(), get()) }
     single { DownloadEngine(androidContext(), get(), get(), get()) }
     single { ReaderContentSource(androidContext(), get(), get()) }
 
     // ---- Repository ----
     single { LibraryRepository(get(), get(), get(), get(), get(), get()) }
-    single { SessionRepository(get(), get(), get(), get()) }
+    single { SessionRepository(get(), get(), get(), get(), get()) }
 
     // ---- ViewModels ----
     viewModel { HomeViewModel(get()) }

@@ -18,6 +18,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -39,6 +40,7 @@ import app.wild.android.ui.screen.AboutScreen
 import app.wild.android.ui.screen.AccountScreen
 import app.wild.android.ui.screen.BookshelfScreen
 import app.wild.android.ui.screen.CategoryScreen
+import app.wild.android.ui.screen.CfVerifyScreen
 import app.wild.android.ui.screen.DownloadDetailScreen
 import app.wild.android.ui.screen.DownloadSelectScreen
 import app.wild.android.ui.screen.DownloadsScreen
@@ -79,6 +81,7 @@ object WildRoutes {
     const val ABOUT = "about"
     const val DOWNLOADS = "downloads"
     const val DOWNLOAD_DETAIL = "download/{aid}"
+    const val CF_VERIFY = "cf-verify"
 
     fun novel(aid: Int) = "novel/$aid"
     fun reviews(aid: Int) = "novel/$aid/reviews"
@@ -110,6 +113,19 @@ fun WildNavShell(intent: Intent? = null) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val onTabRoute = currentRoute in tabRouteSet()
+
+    // CF 验证联动（SZKM-68）：CfSession 需要用户手动过验证时全局弹可见验证页；
+    // 收起由 CfVerifyScreen 自己负责（onBack=popBackStack），这里只负责进、不负责出——
+    // 两侧都 pop 会把 init 也弹掉，NavHost 变白屏。
+    val cfSession = org.koin.compose.koinInject<app.wild.android.data.remote.CfSession>()
+    val cfState by cfSession.state.collectAsState()
+    LaunchedEffect(cfState) {
+        if (cfState is app.wild.android.data.remote.CfState.NeedsUser &&
+            navController.currentDestination?.route != WildRoutes.CF_VERIFY
+        ) {
+            navController.navigate(WildRoutes.CF_VERIFY)
+        }
+    }
 
     val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
     val navSuiteType = when {
@@ -355,6 +371,12 @@ private fun WildNavHost(navController: NavHostController) {
                     navController.navigate(WildRoutes.reader(entry.arguments?.getInt("aid") ?: 0, cid))
                 },
             )
+        }
+        composable(
+            WildRoutes.CF_VERIFY,
+            deepLinks = listOf(navDeepLink { uriPattern = WildRoutes.deepLink("cf-verify") }),
+        ) {
+            CfVerifyScreen(onBack = { navController.popBackStack() })
         }
     }
 }

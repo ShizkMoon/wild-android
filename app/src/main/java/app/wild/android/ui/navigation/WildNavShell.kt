@@ -32,6 +32,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
@@ -44,6 +45,7 @@ import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.R
+import app.wild.android.ui.components.LocalCoverClaims
 import app.wild.android.ui.components.LocalNavAnimatedVisibilityScope
 import app.wild.android.ui.components.LocalSharedTransitionScope
 import app.wild.android.ui.reader.PagedReaderScreen
@@ -194,7 +196,11 @@ fun WildNavShell(intent: Intent? = null) {
  */
 @Composable
 private fun AnimatedContentScope.NavScope(content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalNavAnimatedVisibilityScope provides this) {
+    // 每个目的地一份封面认领集：转场期源屏/目标屏同时组合，隔离两侧互不吃 key
+    CompositionLocalProvider(
+        LocalNavAnimatedVisibilityScope provides this,
+        LocalCoverClaims provides remember { mutableSetOf() },
+    ) {
         content()
     }
 }

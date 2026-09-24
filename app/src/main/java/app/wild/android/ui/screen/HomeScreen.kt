@@ -265,8 +265,9 @@ private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns
             state.data.isNullOrEmpty() ->
                 EmptyBlock("站点公告：本站已正式关闭新书上架，推荐区块为空")
             else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
-                state.data!!.forEach { block ->
-                    item(key = "title-${block.title}") {
+                state.data!!.forEachIndexed { blockIndex, block ->
+                    // 区块标题可能重名，key 带序号防撞（同时隔离 cover-{aid} 之外的锚点）
+                    item(key = "title-$blockIndex-${block.title}") {
                         Text(
                             block.title,
                             style = MaterialTheme.typography.titleLarge,
@@ -274,7 +275,7 @@ private fun RecommendTab(vm: HomeViewModel, onNovelClick: (Int) -> Unit, columns
                             modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
                         )
                     }
-                    item(key = "grid-${block.title}") {
+                    item(key = "grid-$blockIndex-${block.title}") {
                         // 每区块固定 N 列 × 2 行的静态网格（列数随窗口宽度，P0-1）
                         Column(Modifier.padding(horizontal = 12.dp)) {
                             block.novels.take(columns * 2).chunked(columns).forEach { row ->

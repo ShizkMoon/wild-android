@@ -76,7 +76,6 @@ import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.contentColumnMaxWidth
 import app.wild.android.ui.components.novelCoverSharedElement
-import app.wild.android.ui.components.novelTitleSharedBounds
 import app.wild.android.ui.theme.CardOutline
 import app.wild.android.ui.vm.NovelDetailState
 import app.wild.android.ui.vm.NovelInfoViewModel
@@ -292,7 +291,6 @@ private fun NovelHeader(info: NovelInfo, onAuthorClick: (String) -> Unit) {
                 style = MaterialTheme.typography.titleLarge,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.novelTitleSharedBounds(info.aid),
             )
             Spacer(Modifier.height(4.dp))
             // G-13：作者链接给足 48dp 触控目标

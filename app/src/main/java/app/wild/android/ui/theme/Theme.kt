@@ -138,8 +138,9 @@ fun StatusBarIconAppearance(darkIcons: Boolean) {
  * 默认用 WildSeed 蓝系 scheme（含完整 surfaceContainer / outline / surfaceTint 令牌）；
  * dynamicColor 需显式开启（S-6：默认 true 会让整套配色在 API31+ 成死代码）。
  * 明暗由 [darkTheme] 控制（跟随系统/浅/深三态见 SettingsStore）。
- * 注：material3 1.4.0 的 MaterialExpressiveTheme/MotionScheme 仍是 internal，
- * spec 描述的 expressive 令牌不可达——motion 统一节奏由各屏显式 spring 承担。
+ * 注：material3 1.4.0 的 MaterialExpressiveTheme/MotionScheme 虽为 public，
+ * 但需 @ExperimentalMaterial3ExpressiveApi opt-in——选择回落 MaterialTheme，
+ * motion 统一节奏由各屏显式 spring 承担。
  */
 @Composable
 fun WildTheme(
@@ -158,10 +159,13 @@ fun WildTheme(
 
     val view = LocalView.current
     val barDarkIcons = androidx.compose.runtime.remember { mutableStateOf<Boolean?>(null) }
+    // 必须在组合期读取（订阅 snapshot）：StatusBarIconAppearance 的
+    // DisposableEffect 写入发生在 SideEffect 之后，只有组合期订阅才能让
+    // 写入触发重组、SideEffect 随之重跑（S-8）。
+    val darkIcons = barDarkIcons.value ?: !darkTheme
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            val darkIcons = barDarkIcons.value ?: !darkTheme
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = darkIcons
                 isAppearanceLightNavigationBars = darkIcons

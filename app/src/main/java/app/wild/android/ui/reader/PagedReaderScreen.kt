@@ -183,7 +183,7 @@ fun PagedReaderScreen(
             val counterStyle = remember(fg) {
                 TextStyle(fontSize = 10.sp, color = fg)
             }
-            val counterPx = remember(counterStyle, canvasWPx) {
+            val counterPx = remember(counterStyle, canvasWPx, density) {
                 measurer.measure(
                     AnnotatedString("000/000"), counterStyle,
                     constraints = Constraints(maxWidth = canvasWPx.toInt().coerceAtLeast(1)),
@@ -192,7 +192,7 @@ fun PagedReaderScreen(
             val canvasHPx = hPx - topBarPx - bottomBarPx - counterPx
 
             // G-6：空页保底截断所需的最小行高（单行实测）
-            val minLineHeightPx = remember(textStyle, canvasWPx) {
+            val minLineHeightPx = remember(textStyle, canvasWPx, density) {
                 measurer.measure(
                     AnnotatedString("字"), textStyle,
                     constraints = Constraints(maxWidth = canvasWPx.toInt().coerceAtLeast(1)),

@@ -292,6 +292,8 @@ fun NovelGrid(
     onLoadMore: () -> Unit = {},
 ) {
     val gridState: LazyGridState = rememberLazyGridState()
+    // 上游数据偶发重复 aid 会同时撞 lazy key 与 cover-{aid} 共享元素——去重兜底
+    val novels = remember(novels) { novels.distinctBy { it.aid } }
 
     // 距底 ≤6 格触发下一页
     LaunchedEffect(gridState, novels.size, hasMore) {

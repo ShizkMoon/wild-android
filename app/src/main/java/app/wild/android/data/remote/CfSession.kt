@@ -74,6 +74,7 @@ class CfSession(
 
     @Volatile private var lastChallengeUrl: String? = null
     private var userWaiter: CompletableDeferred<Boolean>? = null
+    private val waiterMutex = Mutex()
     private var verifyWatcher: Job? = null
     /** 用户放弃验证的时间戳；放弃后短暂抑制自动弹验证页（防「放弃→页面重试→再弹」循环）。 */
     @Volatile private var gaveUpAt: Long = 0L
@@ -174,8 +175,22 @@ class CfSession(
             return block()
         } catch (e2: CfChallengeException) {
             lastChallengeUrl = e2.url
-            android.util.Log.d(tag, "retry still challenged on ${e2.url} (hardBlock=${e2.hardBlock}) → NeedsUser")
-            if (!awaitUserVerification(mark = e2.hardBlock)) throw e2
+            android.util.Log.d(tag, "retry still challenged on ${e2.url} (hardBlock=${e2.hardBlock})")
+            // 手上的 clearance 可能已被服务端作废（最常见情形）：
+            // 非硬阻断时先试一次隐藏重新求解，失败才升级可见验证页。
+            if (!e2.hardBlock && !suppressed() &&
+                solveHidden(lastChallengeUrl.orEmpty(), hardBlock = false)
+            ) {
+                try {
+                    return block()
+                } catch (e3: CfChallengeException) {
+                    lastChallengeUrl = e3.url
+                    android.util.Log.d(tag, "re-solve retry still challenged on ${e3.url} → NeedsUser")
+                    if (!awaitUserVerification(mark = e3.hardBlock)) throw e3
+                }
+            } else {
+                if (!awaitUserVerification(mark = e2.hardBlock)) throw e2
+            }
         }
         // 可见验证放行后最后一次重试；仍被拦则上抛（UI 给「打开验证页」入口）
         return block()
@@ -312,7 +327,11 @@ class CfSession(
         if (suppressed()) return false
         if (mark) markNeedsUser()
         if (suppressed()) return false // markNeedsUser 期间可能刚被放弃
-        val waiter = userWaiter ?: CompletableDeferred<Boolean>().also { userWaiter = it }
+        // userWaiter 创建放锁内：并发请求共用同一个 deferred，
+        // 否则后到者覆盖先到者的 waiter，先到者只能等满超时。
+        val waiter = waiterMutex.withLock {
+            userWaiter ?: CompletableDeferred<Boolean>().also { userWaiter = it }
+        }
         return withTimeoutOrNull(300_000) { waiter.await() } ?: run {
             _state.value = CfState.Failed("验证等待超时")
             false
@@ -418,6 +437,11 @@ class CfSession(
      */
     suspend fun fetchHtmlViaWebView(url: String): String? {
         val wv = solverWebView ?: return null
+        // 用户刚放弃验证（抑制期内）不再空转 60s——与硬阻断早退同类体验
+        if (suppressed()) {
+            android.util.Log.d(tag, "fetchHtmlViaWebView suppressed (user just gave up)")
+            return null
+        }
         return solveMutex.withLock {
             val full = if (url.startsWith("http")) url else client.apiHost() + url
             val host = full.substringAfter("://").substringBefore('/')

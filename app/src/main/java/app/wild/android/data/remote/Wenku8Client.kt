@@ -207,17 +207,15 @@ class Wenku8Client(
         }
     }
 
-    suspend fun sessionCookieString(host: String): String =
-        cookies.values.filter { domainMatches(it.domain, host) }
-            .joinToString("; ") { "${it.name}=${it.value}" }
-
     /** 供 WebView 预种 cookie（保 session，避免 challenge 页被重定向到 login）。 */
     fun sessionCookiePairs(host: String): List<Pair<String, String>> =
         cookies.values.filter { domainMatches(it.domain, host) }
             .map { it.name to it.value }
 
     /** WebView 解出 cf_clearance 后写入 cookie 库（OkHttp 侧立即生效）。
-     *  CookieManager 不暴露 domain 属性，以抓取时的 host 记（hostOnly）。 */
+     *  CookieManager 不暴露 domain 属性，以抓取时的 host 记（hostOnly）；
+     *  真实 expiry 也拿不到——cf_clearance 写保守 TTL 兜底，避免作废旧证
+     *  永久躺在库里让守卫误以为「有证不用重解」。 */
     suspend fun importWebViewCookies(host: String, cookieHeader: String) {
         val now = System.currentTimeMillis()
         cookieHeader.split(";").forEach { pair ->
@@ -226,7 +224,14 @@ class Wenku8Client(
             val name = pair.substring(0, i).trim()
             val value = pair.substring(i + 1).trim()
             if (name.isEmpty()) return@forEach
-            val entity = CookieEntity(domain = host, name = name, value = value, path = "/", hostOnly = true)
+            val entity = CookieEntity(
+                domain = host,
+                name = name,
+                value = value,
+                expiryEpochMs = if (name == "cf_clearance") now + CF_CLEARANCE_TTL_MS else 0L,
+                path = "/",
+                hostOnly = true,
+            )
             if (entity.isExpired(now)) return@forEach
             cookies["$host|$name"] = entity
             cookieDao.upsert(entity)
@@ -367,6 +372,9 @@ class Wenku8Client(
 
     companion object {
         private val GBK = charset("GBK")
+
+        /** cf_clearance 收割 TTL：CookieManager 不给真实 expiry，写保守值兜底自清。 */
+        private const val CF_CLEARANCE_TTL_MS = 90 * 60 * 1000L
 
         fun decodeGbk(bytes: ByteArray): String = String(bytes, GBK)
 

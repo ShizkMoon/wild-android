@@ -300,14 +300,22 @@ class Wenku8HtmlSource(
                 when {
                     Wenku8Client.isLoginRedirect(r, "/modules/article/bookcase.php") ->
                         throw NeedLoginException("/modules/article/bookcase.php")
-                    r.code in 301..303 || r.isSuccessful -> {
-                        // 200 也可能是挑战页/错误页：粗查 body 再判成功
+                    r.code in 301..303 -> Unit // 真成功 → 重定向回书架页
+                    r.isSuccessful -> {
+                        // 200 也可能是挑战页/业务失败页：先查 CF 标记，再对齐
+                        // bookshelfAdd 判成功文案，否则取 .blockcontent 报错。
                         val text = Wenku8Client.decodeGbk(r.body.bytes())
                         if (Wenku8Client.isCfChallenge(r.code, text)) {
                             throw CfChallengeException(
                                 "/modules/article/bookcase.php",
                                 hardBlock = Wenku8Client.isCfHardBlock(r.code, text),
                             )
+                        }
+                        if (!text.contains("处理成功")) {
+                            val doc = Jsoup.parse(text)
+                            val msg = doc.select(".blockcontent").first()?.text()?.trim()
+                                ?: text.take(300)
+                            throw Wenku8HttpException(200, "书架操作失败：$msg")
                         }
                     }
                     else -> throw Wenku8HttpException(r.code, "书架操作失败 HTTP ${r.code}")

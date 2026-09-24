@@ -9,8 +9,17 @@ data class CookieEntity(
     val domain: String,
     val name: String,
     val value: String,
+    /** 过期时刻（epoch ms）；0 / Long.MAX_VALUE = 会话期 cookie 不过期。 */
     val expiryEpochMs: Long = 0L,
-)
+    /** cookie path（站点基本全是 `/`）。 */
+    val path: String = "/",
+    /** true=仅原 host；false=站点域名可跨子域。 */
+    val hostOnly: Boolean = true,
+) {
+    /** 是否已过期（0/MAX 视为不过期）。 */
+    fun isExpired(nowMs: Long = System.currentTimeMillis()): Boolean =
+        expiryEpochMs > 0L && expiryEpochMs < Long.MAX_VALUE && expiryEpochMs <= nowMs
+}
 
 /** 接口缓存：`cache_first(key, ttl)` —— index 10min、其余 1h。 */
 @Entity(tableName = "web_cache")

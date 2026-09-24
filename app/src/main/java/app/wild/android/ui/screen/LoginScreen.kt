@@ -193,7 +193,7 @@ fun LoginScreen(
                                             .onFailure {
                                                 scope.launch {
                                                     snackbar.showSnackbar(
-                                                        it.message ?: "登录失败"
+                                                        app.wild.android.ui.vm.friendlyError(it)
                                                     )
                                                 }
                                             }

@@ -31,7 +31,9 @@ import java.io.IOException
 
 /** 统一错误文案（spec 附录 F.1 的错误块由 UI 呈现）。 */
 fun friendlyError(t: Throwable): String = when (t) {
-    is CfChallengeException -> "站点防护验证未通过，请下拉重试（Cloudflare）"
+    is CfChallengeException ->
+        if (t.hardBlock) "站点防护验证未通过（Cloudflare 硬拦截）——打开站点验证手动过一次，或切换网络后重试"
+        else "站点防护验证未通过（Cloudflare）——打开站点验证手动过一次，或下拉重试"
     is app.wild.android.data.remote.NeedLoginException -> "该页面需要登录后访问"
     is Wenku8HttpException -> t.message ?: "请求失败（HTTP ${t.code}）"
     is IOException -> "网络连接失败，请检查网络后下拉重试"

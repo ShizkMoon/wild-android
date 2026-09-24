@@ -13,7 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import app.wild.android.data.prefs.ThemeMode
 import app.wild.android.data.prefs.SettingsStore
-import app.wild.android.data.remote.CfBypass
+import app.wild.android.data.remote.CfSession
 import app.wild.android.ui.navigation.WildNavShell
 import app.wild.android.ui.reader.ReaderSettings
 import app.wild.android.ui.theme.WildTheme
@@ -23,15 +23,15 @@ import org.koin.android.ext.android.inject
 class MainActivity : ComponentActivity() {
 
     private val settingsStore: SettingsStore by inject()
-    private val cfBypass: CfBypass by inject()
+    private val cfSession: CfSession by inject()
     private var latestIntent = mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         latestIntent.value = intent
         enableEdgeToEdge()
-        // CF 绕过 WebView（1px 隐藏）+ 阅读器设置持久化装载
-        cfBypass.attach(this)
+        // CF 求解器 WebView（1px 隐藏）+ 阅读器设置持久化装载
+        cfSession.attach(this)
         lifecycleScope.launch { ReaderSettings.attach(settingsStore) }
         setContent {
             val themeMode by settingsStore.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
@@ -48,7 +48,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        cfBypass.detachFrom(this)
+        cfSession.detachFrom(this)
         super.onDestroy()
     }
 

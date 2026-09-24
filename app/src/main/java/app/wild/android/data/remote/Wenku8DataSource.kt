@@ -10,7 +10,8 @@ package app.wild.android.data.remote
  *     `/novel/{aid/1000}/{aid}/{cid}.htm`（正文 + 目录 `index.htm`）、封面/插图域名。
  *   - Cloudflare 拦截：`/modules/article/…`（tags/toplist/articlelist/search/
  *     reviews/bookcase/userdetail/addbookcase）—— 命中时抛 [CfChallengeException]，
- *     由 `CfBypass` 用隐藏 WebView 解 `cf_clearance` 后重试。
+ *     由 `CfSession` 状态机处理：隐藏 WebView 解 `cf_clearance` → 透明重试；
+ *     解不动/硬阻断 → 可见验证页（NeedsUser）放行后重试。
  *   - 插图：章节 HTML 的 `#content img[src]` 在抓取层重建 `<!--image-->URL<!--image-->`。
  * Repository 依赖本接口，对通道选型无感知。
  */

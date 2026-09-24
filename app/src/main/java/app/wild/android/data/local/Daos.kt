@@ -12,14 +12,21 @@ interface CookieDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(cookie: CookieEntity)
 
-    @Query("SELECT * FROM cookie WHERE domain = :domain OR domain LIKE '%' || :domain")
-    suspend fun forDomain(domain: String): List<CookieEntity>
-
     @Query("SELECT * FROM cookie")
     suspend fun all(): List<CookieEntity>
 
     @Query("SELECT EXISTS(SELECT 1 FROM cookie WHERE name = 'jieqiUserInfo')")
     suspend fun isLoggedIn(): Boolean
+
+    @Delete
+    suspend fun delete(cookie: CookieEntity)
+
+    /** 清理已过期行（0/MAX = 会话期 cookie 不过期）。 */
+    @Query("DELETE FROM cookie WHERE expiryEpochMs > 0 AND expiryEpochMs < :maxLong AND expiryEpochMs <= :nowMs")
+    suspend fun deleteExpired(nowMs: Long, maxLong: Long = Long.MAX_VALUE)
+
+    @Query("DELETE FROM cookie WHERE name = 'cf_clearance'")
+    suspend fun deleteClearance()
 
     @Query("DELETE FROM cookie")
     suspend fun clearAll()

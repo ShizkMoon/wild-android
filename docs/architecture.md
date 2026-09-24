@@ -18,7 +18,7 @@ data/repository/                        LibraryRepository（历史/搜索/书架
 data/remote/                            Wenku8DataSource 接口（Repository/VM 只见它）
         │                               Wenku8HtmlSource（Jsoup 抓取实现）
         │                               Wenku8Client（OkHttp + cookie 持久化 + 接口缓存）
-        │                               CfBypass（隐藏 WebView 解 cf_clearance）
+        │                               CfSession（状态机：隐藏 WebView 解 cf_clearance → 可见验证页降级）
         │
 data/local/  Room（cookie / web_cache / chapter_cache / image_cache /
              reading_history / search_history / sign_log /
@@ -45,11 +45,16 @@ Compose 侧 `koinViewModel(parameters = { parametersOf(aid, cid) })`。
 | 章节正文 | `/novel/{aid/1000}/{aid}/{cid}.htm`（`#content` + `img[src]`→`<!--image-->`） | 否 |
 | 分类/排行/完结/搜索/书评/书架/账户 | `/modules/article/…` | 是 |
 
-`Wenku8HtmlSource` 的每个方法都被 `guard{}` 包住：
-命中 CF 挑战页 → `Wenku8Client` 抛 `CfChallengeException` → `CfBypass.guard`
+`Wenku8HtmlSource` 的每个方法（含登录/验证码/书架写操作）都被 `guard{}` 包住：
+命中 CF 挑战页 → `Wenku8Client` 抛 `CfChallengeException` → `CfSession.guard`
 用挂进 decorView 的 1px WebView 加载同一 URL，轮询 `cf_clearance` cookie 落地后
-导入 OkHttp cookie 库并重试一次。clearance 与 UA/IP 绑定，加载前 WebView UA
-对齐 `client.userAgent`。`CfBypass.attach(this)`/`detach` 由 MainActivity 驱动。
+导入 OkHttp cookie 库并透明重试；隐藏求解失败/`Attention Required` 硬阻断时
+状态推进 `NeedsUser`，NavShell 弹出全屏 `CfVerifyScreen`（可见 WebView）让用户
+手动过一次，通过判定=CookieManager 出现 cf_clearance 或挑战页标记消失。
+clearance 与 UA/IP 绑定：wenku8 域内 OkHttp 请求与两侧 WebView 一律
+`SettingsStore.DEFAULT_UA`。重试仍被拦时 `fetchHtmlViaWebView` 兜底直接取 HTML。
+`CfSession.attach(this)`/`detachFrom` 由 MainActivity 驱动；
+302→login.php 判定为 `NeedLoginException`（不再被当成写操作成功）。
 
 ## 缓存层级
 

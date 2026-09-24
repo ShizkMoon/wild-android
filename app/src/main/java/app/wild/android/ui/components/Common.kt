@@ -203,6 +203,8 @@ fun ErrorBlock(
     title: String = "加载失败",
     onRefresh: () -> Unit = {},
 ) {
+    // CF 验证失败类错误给「打开站点验证」直达入口（SZKM-68：不再死胡同）。
+    val showVerifyAction = message.contains("验证") || message.contains("Cloudflare")
     PullToRefreshBox(
         isRefreshing = false,
         onRefresh = onRefresh,
@@ -228,6 +230,13 @@ fun ErrorBlock(
                         Text("$title (下拉刷新)", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Text(message, style = MaterialTheme.typography.bodyMedium)
+                        if (showVerifyAction) {
+                            Spacer(Modifier.height(16.dp))
+                            val cfSession = org.koin.compose.koinInject<app.wild.android.data.remote.CfSession>()
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { cfSession.requestUserVerify() },
+                            ) { Text("打开站点验证") }
+                        }
                     }
                 }
             }

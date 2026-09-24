@@ -23,9 +23,14 @@ import okhttp3.Request
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-/** Cloudflare 挑战：命中即触发 WebView 绕过（spec §3.4）。 */
-class CfChallengeException(val url: String, message: String = "Cloudflare challenge") :
-    Exception(message)
+/** Cloudflare 挑战：命中即触发 WebView 绕过（spec §3.4）。
+ *  [hardBlock] = `Attention Required` 级 IP 硬阻断，无 JS 挑战可解，
+ *  隐藏求解注定失败，应直接降级可见验证页。 */
+class CfChallengeException(
+    val url: String,
+    val hardBlock: Boolean = false,
+    message: String = "Cloudflare challenge",
+) : Exception(message)
 
 /** 站点返回的业务/HTTP 错误。 */
 class Wenku8HttpException(val code: Int, message: String) : Exception(message)
@@ -39,8 +44,9 @@ class NeedLoginException(val url: String) : Exception("需要登录")
  * - 浏览器 UA 持久化于 SettingsStore（Dalvik UA 会被站点 302 到 login.php）；
  *   CF 检测（`Just a moment`/`_cf_chl_opt`/`cf_chl`）。
  * - GBK 解码响应、GBK URL 编码中文参数；写操作不跟随 302（302=成功语义）。
- * - CF 命中时抛 [CfChallengeException]，由 [CfBypass] 用隐藏 WebView 解出
- *   `cf_clearance` 后重试（clearance 与 UA/IP 绑定，故 WebView UA 已对齐本 UA）。
+ * - CF 命中时抛 [CfChallengeException]，由 [CfSession] 状态机处理
+ *   （隐藏 WebView 解 → 可见验证页降级），clearance 与 UA/IP 绑定——
+ *   故 wenku8 域内请求与求解器 WebView 一律同一浏览器 UA（见 [uaFor]）。
  */
 class Wenku8Client(
     private val context: Context,
@@ -61,29 +67,50 @@ class Wenku8Client(
     val hasClearance: StateFlow<Boolean> = _hasClearance
 
     private val cookieJar = object : CookieJar {
-        override fun loadForRequest(url: HttpUrl): List<Cookie> =
-            cookies.values.filter { domainMatches(it.domain, url.host) }
+        override fun loadForRequest(url: HttpUrl): List<Cookie> {
+            val now = System.currentTimeMillis()
+            val sendable = cookies.values
+                .filter { domainMatches(it.domain, url.host) && !it.isExpired(now) }
+            // 运行中自检：同域请求实际不再携带 cf_clearance（如 TTL 到期/被删）
+            // 时复位标记，避免守卫误以为「有证」而跳过隐藏重解。
+            if (isWenku8Host(url.host) || url.host.equals(apiHostName, ignoreCase = true)) {
+                _hasClearance.value = sendable.any { it.name == "cf_clearance" }
+            }
+            return sendable
                 .map { c ->
                     Cookie.Builder()
                         .name(c.name).value(c.value)
                         .domain(c.domain.removePrefix("."))
-                        .path("/")
+                        .path(c.path)
                         .build()
                 }
+        }
 
         override fun saveFromResponse(url: HttpUrl, cookieList: List<Cookie>) {
-            scope.launch {
-                cookieList.forEach { c ->
-                    val entity = CookieEntity(
-                        domain = c.domain,
-                        name = c.name,
-                        value = c.value,
-                        expiryEpochMs = c.expiresAt,
-                    )
+            // 内存先同步写（后续请求立即可见），Room 落库异步。
+            val entities = mutableListOf<CookieEntity>()
+            val expired = mutableListOf<CookieEntity>()
+            cookieList.forEach { c ->
+                val entity = CookieEntity(
+                    domain = c.domain,
+                    name = c.name,
+                    value = c.value,
+                    expiryEpochMs = c.expiresAt,
+                    path = c.path,
+                    hostOnly = !c.domain.startsWith("."),
+                )
+                if (entity.isExpired()) {
+                    cookies.remove("${entity.domain}|${entity.name}")
+                    expired += entity
+                } else {
                     cookies["${entity.domain}|${entity.name}"] = entity
-                    cookieDao.upsert(entity)
+                    entities += entity
                     if (entity.name == "cf_clearance") _hasClearance.value = true
                 }
+            }
+            scope.launch {
+                entities.forEach { cookieDao.upsert(it) }
+                expired.forEach { cookieDao.delete(it) }
             }
         }
     }
@@ -105,7 +132,7 @@ class Wenku8Client(
     fun imageClient(): OkHttpClient = plainClient.newBuilder()
         .addInterceptor { chain ->
             val req = chain.request().newBuilder()
-                .header("User-Agent", uaFor(chain.request().url.encodedPath))
+                .header("User-Agent", uaFor(chain.request().url))
                 .header("Referer", SettingsStore.DEFAULT_API_HOST + "/")
                 .build()
             chain.proceed(req)
@@ -115,35 +142,49 @@ class Wenku8Client(
     /** 原始 client（供需要自定拦截器的场景）。 */
     fun rawClient(): OkHttpClient = plainClient
 
-    suspend fun init() = withContext(Dispatchers.IO) {
-        // 恢复持久化 cookie
-        cookieDao.all().forEach { c -> cookies["${c.domain}|${c.name}"] = c }
-        _hasClearance.value = cookies.values.any { it.name == "cf_clearance" }
-        // UA：站点按 UA 分流——App UA 可直连内容页（book/toc/chapter/reviews/checkcode），
-        // 交互页（index/modules）被 302 到 login.php；浏览器 UA 一律吃 CF 挑战。
-        // 故默认 App UA；CF 交互页另行用固定浏览器 UA（见 uaFor），与 CfBypass WebView 同 UA。
-        val stored = settings.userAgent.first()
-        if (stored.isNotBlank() && stored.startsWith("Dalvik")) {
-            _userAgent.value = stored
-        } else {
-            val ua = "Dalvik/2.1.0 (Linux; U; Android ${10 + (0..5).random()}; " +
-                "Pixel ${5 + (0..4).random()} Build/UQ1A.${(230000..250000).random()}.00${(1..9).random()})"
-            _userAgent.value = ua
-            settings.setUserAgent(ua)
+    private val initMutex = Mutex()
+    private var initialized = false
+
+    /** 幂等初始化：恢复持久化 cookie（剔除过期）+ UA。
+     *  UA 策略（SZKM-66 方案 D-2）：wenku8.net 域内一律固定浏览器 UA——
+     *  cf_clearance 按 UA+IP 绑定，按路径分流会让通行证对内容页无效；
+     *  App UA（Dalvik）仅保留给站外/图片等不挂 CF 的请求。 */
+    suspend fun init() = initMutex.withLock {
+        if (initialized) return@withLock
+        withContext(Dispatchers.IO) {
+            val now = System.currentTimeMillis()
+            cookieDao.deleteExpired(now)
+            cookieDao.all().forEach { c -> cookies["${c.domain}|${c.name}"] = c }
+            _hasClearance.value = cookies.values.any { it.name == "cf_clearance" && !it.isExpired(now) }
+            val stored = settings.userAgent.first()
+            if (stored.isNotBlank() && stored.startsWith("Dalvik")) {
+                _userAgent.value = stored
+            } else {
+                val ua = "Dalvik/2.1.0 (Linux; U; Android ${10 + (0..5).random()}; " +
+                    "Pixel ${5 + (0..4).random()} Build/UQ1A.${(230000..250000).random()}.00${(1..9).random()})"
+                _userAgent.value = ua
+                settings.setUserAgent(ua)
+            }
+            initialized = true
         }
     }
 
     suspend fun apiHost(): String {
         val h = settings.apiHost.first().trim()
-        return if (h.isEmpty()) SettingsStore.DEFAULT_API_HOST else h.trimEnd('/')
+        val base = if (h.isEmpty()) SettingsStore.DEFAULT_API_HOST else h.trimEnd('/')
+        apiHostName = base.substringAfter("://").substringBefore('/')
+        return base
     }
 
+    /** apiHost 的 host（最近一次 apiHost() 读取时刷新），uaFor 判域用。 */
+    @Volatile private var apiHostName: String = "www.wenku8.net"
+
     /** 预热会话：GET `/` + `/login.php` 种 session/clearance cookie（spec `init_session`）。
-     *  每个请求独立容忍失败（`/` 会被 302→login 抛 NeedLoginException），
+     *  CF 挑战一律上抛（交给外层 guard 求解后重试）；其余错误逐个容忍，
      *  保证 `/login.php` 一定执行到——它才是种 PHPSESSID 的关键。 */
     suspend fun initSession() {
-        runCatching { get("/") }
-        runCatching { get("/login.php") }
+        runCatching { get("/") }.onFailure { if (it is CfChallengeException) throw it }
+        runCatching { get("/login.php") }.onFailure { if (it is CfChallengeException) throw it }
     }
 
     suspend fun isLoggedIn(): Boolean = cookieDao.isLoggedIn()
@@ -172,34 +213,74 @@ class Wenku8Client(
         }
     }
 
-    suspend fun sessionCookieString(host: String): String =
-        cookies.values.filter { domainMatches(it.domain, host) }
-            .joinToString("; ") { "${it.name}=${it.value}" }
-
     /** 供 WebView 预种 cookie（保 session，避免 challenge 页被重定向到 login）。 */
     fun sessionCookiePairs(host: String): List<Pair<String, String>> =
         cookies.values.filter { domainMatches(it.domain, host) }
             .map { it.name to it.value }
 
-    /** WebView 解出 cf_clearance 后写入 cookie 库（OkHttp 侧立即生效）。 */
+    /** WebView 解出 cf_clearance 后写入 cookie 库（OkHttp 侧立即生效）。
+     *  CookieManager 不暴露 domain 属性，以抓取时的 host 记（hostOnly）；
+     *  真实 expiry 也拿不到——cf_clearance 写保守 TTL 兜底，避免作废旧证
+     *  永久躺在库里让守卫误以为「有证不用重解」。 */
     suspend fun importWebViewCookies(host: String, cookieHeader: String) {
+        val now = System.currentTimeMillis()
         cookieHeader.split(";").forEach { pair ->
             val i = pair.indexOf('=')
             if (i <= 0) return@forEach
             val name = pair.substring(0, i).trim()
             val value = pair.substring(i + 1).trim()
-            val domain = host
-            val entity = CookieEntity(domain, name, value)
-            cookies["$domain|$name"] = entity
+            if (name.isEmpty()) return@forEach
+            val entity = CookieEntity(
+                domain = host,
+                name = name,
+                value = value,
+                expiryEpochMs = if (name == "cf_clearance") now + CF_CLEARANCE_TTL_MS else 0L,
+                path = "/",
+                hostOnly = true,
+            )
+            if (entity.isExpired(now)) return@forEach
+            cookies["$host|$name"] = entity
             cookieDao.upsert(entity)
             if (name == "cf_clearance") _hasClearance.value = true
         }
     }
 
+    /** 退出登录：清 Room + 内存 + WebView CookieManager（防跨账号泄漏与旧 clearance 污染）。 */
     suspend fun clearCookies() {
         cookies.clear()
         cookieDao.clearAll()
         _hasClearance.value = false
+        withContext(Dispatchers.Main) {
+            runCatching {
+                android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                android.webkit.CookieManager.getInstance().flush()
+            }
+        }
+    }
+
+    /**
+     * 丢弃 cf_clearance（服务端作废后重解前置）：内存 + Room + WebView
+     * CookieManager 三处同清，并复位 hasClearance——不清 WebView 侧会让
+     * solveHidden 的 baseline 判新被旧值干扰（旧值=baseline，永远等不到「新值」）。
+     * [url] 用于定位 host；空串回退 apiHost。
+     */
+    suspend fun invalidateClearance(url: String = "") {
+        val host = url.substringAfter("://").substringBefore('/')
+            .ifEmpty { apiHost().substringAfter("://").substringBefore('/') }
+        val root = host.split('.').takeLast(2).joinToString(".")
+        cookies.keys.filter { it.substringAfter('|') == "cf_clearance" }
+            .forEach { cookies.remove(it) }
+        cookieDao.deleteClearance()
+        _hasClearance.value = false
+        withContext(Dispatchers.Main) {
+            runCatching {
+                val cm = android.webkit.CookieManager.getInstance()
+                // 过期写空值覆盖两处可能的存储位置（host / 根域）
+                cm.setCookie("https://$host/", "cf_clearance=; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                cm.setCookie("https://$root/", "cf_clearance=; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                cm.flush()
+            }
+        }
     }
 
     /** 清 OkHttp 磁盘缓存 + 接口缓存（设置页「清除接口缓存」）。 */
@@ -213,7 +294,7 @@ class Wenku8Client(
     // ---- 请求原语 ----
 
     private fun uaHeaders(builder: Request.Builder, referer: String? = null): Request.Builder {
-        builder.header("User-Agent", uaFor(builder.build().url.encodedPath))
+        builder.header("User-Agent", uaFor(builder.build().url))
         builder.header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         builder.header("Accept-Language", "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7")
         builder.header("Referer", referer ?: "${SettingsStore.DEFAULT_API_HOST}/login.php")
@@ -221,13 +302,13 @@ class Wenku8Client(
     }
 
     /**
-     * 每路径 UA（实测站点按 UA 分流）：
-     * - `/index.php`、`/modules/article/…` → CF 交互页，用固定浏览器 UA
-     *   （与 CfBypass WebView 一致，cf_clearance 按 UA 绑定）。
-     * - 其余（book/novel/reviews/checkcode/login/图片）→ App UA，站点直连放行。
+     * 域名级 UA（SZKM-66 方案 D-2）：`*.wenku8.net` 一律固定浏览器 UA——
+     * cf_clearance 按 UA 绑定，按路径分流会让通行证对内容页立即失效；
+     * WebView 求解侧也固定同一 UA（见 CfSession.attach）。
+     * 其余主机（图片/外部 API，不挂 CF）用 App Dalvik UA。
      */
-    fun uaFor(path: String): String =
-        if (path.startsWith("/index.php") || path.startsWith("/modules/") || path == "/") {
+    fun uaFor(url: HttpUrl): String =
+        if (isWenku8Host(url.host) || url.host.equals(apiHostName, ignoreCase = true)) {
             SettingsStore.DEFAULT_UA
         } else {
             _userAgent.value.ifBlank { "Dalvik/2.1.0" }
@@ -253,7 +334,13 @@ class Wenku8Client(
             val url = if (path.startsWith("http")) path else apiHost() + path
             val req = uaHeaders(Request.Builder().url(url), referer).get().build()
             plainClient.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) throw Wenku8HttpException(resp.code, "HTTP ${resp.code} for $url")
+                if (!resp.isSuccessful) {
+                    val body = runCatching { decodeGbk(resp.body.bytes()) }.getOrDefault("")
+                    if (isCfChallenge(resp.code, body)) {
+                        throw CfChallengeException(url, hardBlock = isCfHardBlock(resp.code, body))
+                    }
+                    throw Wenku8HttpException(resp.code, "HTTP ${resp.code} for $url")
+                }
                 resp.body.bytes()
             }
         }
@@ -295,12 +382,13 @@ class Wenku8Client(
         val bytes = resp.body.bytes()
         val text = decodeGbk(bytes)
         android.util.Log.d("Wenku8Client", "GET $url → ${resp.code} len=${bytes.size} cf=${isCfChallenge(resp.code, text)}")
-        // 站点 UA 分流：App UA 访问交互页会被 302 到 login.php（跟随重定向后终态 URL 即 login）。
-        if (resp.request.url.encodedPath.contains("login.php") && !url.contains("login.php")) {
-            throw NeedLoginException(url)
+        // 判定顺序：302→login 先于 CF/成功（302 本身是写操作成功语义，
+        // 但目标 login.php 的那一种 = 「未登录被踢」，必须识别成 NeedLogin）。
+        if (isLoginRedirect(resp, url)) throw NeedLoginException(url)
+        if (isCfChallenge(resp.code, text)) {
+            throw CfChallengeException(url, hardBlock = isCfHardBlock(resp.code, text))
         }
-        if (isCfChallenge(resp.code, text)) throw CfChallengeException(url)
-        if (resp.code == 302 || resp.code == 301) return text // 写操作语义：302=成功
+        if (resp.code in 301..303) return text // 写操作语义：302=成功
         if (!resp.isSuccessful) throw Wenku8HttpException(resp.code, "HTTP ${resp.code} for $url")
         return text
     }
@@ -315,6 +403,9 @@ class Wenku8Client(
 
     companion object {
         private val GBK = charset("GBK")
+
+        /** cf_clearance 收割 TTL：CookieManager 不给真实 expiry，写保守值兜底自清。 */
+        private const val CF_CLEARANCE_TTL_MS = 90 * 60 * 1000L
 
         fun decodeGbk(bytes: ByteArray): String = String(bytes, GBK)
 
@@ -335,5 +426,27 @@ class Wenku8Client(
             return body.contains("_cf_chl_opt") ||
                 (body.contains("Just a moment") && body.contains("challenge"))
         }
+
+        /** IP/指纹级硬阻断：无 JS 挑战对象，隐藏 WebView 无解，只能走可见验证页。 */
+        fun isCfHardBlock(code: Int, body: String): Boolean =
+            code == 403 && body.contains("Attention Required") &&
+                !body.contains("cf_chl") && !body.contains("_cf_chl_opt")
+
+        /**
+         * 「被踢去登录」判定（SZKM-66 RC-4）：跟随重定向后终态是 login.php，
+         * 或 noRedirect 响应的 Location 指向 login.php——二者都是 NeedLogin，
+         * 绝不能当成写操作成功。
+         */
+        fun isLoginRedirect(resp: okhttp3.Response, originalUrl: String): Boolean {
+            if (resp.code in 301..303 || resp.code in 307..308) {
+                resp.header("Location")?.let { if (it.contains("login.php")) return true }
+            }
+            val finalPath = resp.request.url.encodedPath
+            return finalPath.contains("login.php") && !originalUrl.contains("login.php")
+        }
+
+        /** 站点域判定：`wenku8.net` 及其子域（镜像设置项也兼容其它二级域）。 */
+        fun isWenku8Host(host: String): Boolean =
+            host == "wenku8.net" || host.endsWith(".wenku8.net")
     }
 }

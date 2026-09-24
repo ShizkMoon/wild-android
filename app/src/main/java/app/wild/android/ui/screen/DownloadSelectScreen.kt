@@ -1,6 +1,7 @@
 package app.wild.android.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,7 +21,9 @@ import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -96,6 +100,7 @@ fun DownloadSelectScreen(
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
                 },
                 actions = {
+                    // AppBar 只留全选；下载动作下沉底部操作条（§2.14 选中计数条）
                     IconButton(onClick = {
                         selected = if (allSelected) emptySet() else selectable.toSet()
                     }) {
@@ -104,27 +109,52 @@ fun DownloadSelectScreen(
                             "全选",
                         )
                     }
-                    IconButton(onClick = {
-                        if (selected.isEmpty()) {
-                            scope.launch { snackbar.showSnackbar("请选择要下载的章节") }
-                        } else {
-                            vm.enqueue(selected) {
-                                scope.launch { snackbar.showSnackbar("已加入下载队列") }
-                            }
-                            onBack()
-                        }
-                    }) {
-                        Icon(Icons.Filled.Download, "下载")
-                    }
                 },
             )
+        },
+        bottomBar = {
+            // 底部操作条：surfaceContainer + 顶缘细线，已选计数 + 下载钮
+            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+                Column {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "已选 ${selected.size} 章",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            onClick = {
+                                if (selected.isEmpty()) {
+                                    scope.launch { snackbar.showSnackbar("请选择要下载的章节") }
+                                } else {
+                                    vm.enqueue(selected) {
+                                        scope.launch { snackbar.showSnackbar("已加入下载队列") }
+                                    }
+                                    onBack()
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Filled.Download, null, modifier = Modifier.padding(end = 4.dp))
+                            Text("下载")
+                        }
+                    }
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         when {
             loading -> LoadingBlock(Modifier.padding(padding))
             error != null && volumes.isEmpty() ->
-                ErrorBlock(error!!, title = "目录加载失败", onRefresh = { vm.load() })
+                ErrorBlock(error!!, title = "目录加载失败", onRefresh = { vm.load() }, modifier = Modifier.padding(padding))
             else -> LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -136,6 +166,10 @@ fun DownloadSelectScreen(
                         modifier = Modifier
                             .contentColumnWidth()
                             .padding(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        ),
+                        border = app.wild.android.ui.theme.CardOutline,
                     ) {
                         Row(Modifier.padding(16.dp)) {
                             Surface(
@@ -159,27 +193,47 @@ fun DownloadSelectScreen(
                     }
                 }
                 volumes.forEach { volume ->
-                    item {
+                    item(key = "v-${volume.volumeId}") {
                         Card(
                             modifier = Modifier
                                 .contentColumnWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .animateItem(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            ),
+                            border = app.wild.android.ui.theme.CardOutline,
                         ) {
                             Column(Modifier.padding(vertical = 8.dp)) {
                                 Text(
                                     volume.name,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(16.dp),
                                 )
                                 HorizontalDivider()
                                 volume.chapters.forEach { ch ->
                                     val isDownloaded = ch.cid in downloaded
                                     ListItem(
-                                        headlineContent = { Text(ch.title) },
+                                        headlineContent = {
+                                            Text(
+                                                ch.title,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                // 已下载项降层：内容不可再下载
+                                                color = if (isDownloaded) MaterialTheme.colorScheme.onSurfaceVariant
+                                                    else Color.Unspecified,
+                                            )
+                                        },
                                         trailingContent = {
                                             if (isDownloaded) {
-                                                Icon(Icons.Filled.CheckCircle, "已下载", tint = Color(0xFF4CAF50))
+                                                Icon(
+                                                    Icons.Filled.CheckCircle,
+                                                    "已下载",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                )
                                             } else {
                                                 Checkbox(
                                                     checked = ch.cid in selected,

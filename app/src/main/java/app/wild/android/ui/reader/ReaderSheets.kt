@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -41,26 +43,35 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.wild.android.data.remote.Volume
+import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.first
 
 /**
  * 目录弹层（spec §2.11）：普通阅读器 0.9 高可拖拽；HTML 0.8。
- * 卷名分组 + 章 ListTile，当前章高亮并自动滚到位。
+ * 卷名分组 + 章 ListTile，当前章高亮并滚到视口中央。
+ * [currentHighlightColor]：非 null 时选中章铺底色（普通阅读器）；null 时选中章用
+ * primary 字色（HTML 阅读器，spec §2.11）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,12 +79,14 @@ fun ChapterCatalogSheet(
     volumes: List<Volume>,
     currentCid: Int,
     heightFraction: Float,
-    currentHighlightColor: Color,
+    currentHighlightColor: Color?,
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().fillMaxHeight(heightFraction)) {
+    // G-18/skipPartiallyExpanded 显式化：内容定高，不允许停在半展开锚点
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(heightFraction).navigationBarsPadding()) {
             // 头部：menu_book + 「目录」+ 关闭
             Row(
                 modifier = Modifier
@@ -92,10 +105,11 @@ fun ChapterCatalogSheet(
             }
             HorizontalDivider()
             val listState = rememberLazyListState()
-            // 打开时滚到当前章（按章 56/卷 48 估高）
+            val itemPx = with(LocalDensity.current) { 56.dp.toPx() }
+            // 打开时把当前章滚到视口中央（等首帧布局拿到 viewport 再动）
             LaunchedEffect(Unit) {
                 var index = 0
-                var found = 0
+                var found = -1
                 volumes.forEach { v ->
                     index++
                     v.chapters.forEach { c ->
@@ -103,7 +117,14 @@ fun ChapterCatalogSheet(
                         index++
                     }
                 }
-                listState.scrollToItem(found.coerceAtLeast(0))
+                if (found < 0) return@LaunchedEffect
+                snapshotFlow { listState.layoutInfo.viewportSize.height }
+                    .first { it > 0 }
+                listState.scrollToItem(found)
+                listState.animateScrollToItem(
+                    found,
+                    scrollOffset = -(listState.layoutInfo.viewportSize.height / 2 - itemPx / 2).toInt(),
+                )
             }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 volumes.forEach { volume ->
@@ -123,15 +144,17 @@ fun ChapterCatalogSheet(
                                     Text(
                                         ch.title,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (currentHighlightColor == Color.Transparent && selected)
+                                        color = if (currentHighlightColor == null && selected)
                                             MaterialTheme.colorScheme.primary
                                         else Color.Unspecified,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     )
                                 },
                                 modifier = Modifier
                                     .clickable { onSelect(ch.cid) }
                                     .then(
-                                        if (selected && currentHighlightColor != Color.Transparent)
+                                        if (selected && currentHighlightColor != null)
                                             Modifier.background(currentHighlightColor)
                                         else Modifier,
                                     ),
@@ -151,63 +174,85 @@ fun ChapterCatalogSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(2f / 3f)
                 .verticalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                .padding(start = 16.dp, end = 16.dp)
+                // G-18：sheet 内容让出导航条 inset
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp),
         ) {
             Text("设置", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(vertical = 8.dp))
 
             // 1. 阅读器类型
             SettingsLabel("阅读器类型")
+            var pendingTypeHint by remember { mutableStateOf(false) }
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 SegmentedButton(
                     selected = ReaderSettings.readerType == ReaderType.NORMAL,
-                    onClick = { ReaderSettings.readerType = ReaderType.NORMAL },
+                    onClick = {
+                        if (ReaderSettings.readerType != ReaderType.NORMAL) pendingTypeHint = true
+                        ReaderSettings.readerType = ReaderType.NORMAL
+                    },
                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                     icon = { Icon(Icons.Outlined.Book, null, Modifier.size(18.dp)) },
                 ) { Text("普通阅读器") }
                 SegmentedButton(
                     selected = ReaderSettings.readerType == ReaderType.HTML,
-                    onClick = { ReaderSettings.readerType = ReaderType.HTML },
+                    onClick = {
+                        if (ReaderSettings.readerType != ReaderType.HTML) pendingTypeHint = true
+                        ReaderSettings.readerType = ReaderType.HTML
+                    },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                     icon = { Icon(Icons.Outlined.Html, null, Modifier.size(18.dp)) },
                 ) { Text("HTML阅读器") }
             }
+            // M-9：切换对当前已打开的阅读器无即时效果，给明确反馈
+            if (pendingTypeHint) {
+                Text(
+                    "已切换，下次进入章节生效",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
 
             // 2. 字体大小 14-24 步1
-            SliderRow("字体大小", ReaderSettings.fontSize, 14f..24f, 10, { "${it.toInt()}" }) {
+            SliderRow("字体大小", ReaderSettings.fontSize, 14f..24f, step = 1f, { "${it.toInt()}" }) {
                 ReaderSettings.fontSize = it
             }
             // 3. 段落间距：普通 2/17/32 三档；HTML 16-32 步2
             if (html) {
-                SliderRow("段落间距", ReaderSettings.paragraphSpacing, 16f..32f, 7, { "${it.toInt()}" }) {
+                SliderRow("段落间距", ReaderSettings.paragraphSpacing, 16f..32f, step = 2f, { "${it.toInt()}" }) {
                     ReaderSettings.paragraphSpacing = it
                 }
             } else {
+                // 三档吸附：持久值不在刻度上时显示就近档，拖动落在 2/17/32
+                val snapped = snapToSteps(ReaderSettings.paragraphSpacing, 2f..32f, 15f)
                 SliderRow(
-                    "段落间距", ReaderSettings.paragraphSpacing, 2f..32f, 1,
+                    "段落间距", snapped, 2f..32f, step = 15f,
                     { "${it.toInt()}" },
                 ) { ReaderSettings.paragraphSpacing = it }
             }
             // 4. 行高 1.0-2.0 步0.05
-            SliderRow("行高", ReaderSettings.lineHeight, 1f..2f, 20, { String.format("%.1f", it) }) {
+            SliderRow("行高", ReaderSettings.lineHeight, 1f..2f, step = 0.05f, { String.format("%.2f", it) }) {
                 ReaderSettings.lineHeight = it
             }
-            // 5-8. 四边距
-            SliderRow("顶部边距", ReaderSettings.topBarHeight, 0f..100f, 20, { "${it.toInt()}" }) {
+            // 5-8. 四边距（步4：默认值 56/16 都在刻度上）
+            SliderRow("顶部边距", ReaderSettings.topBarHeight, 0f..100f, step = 4f, { "${it.toInt()}" }) {
                 ReaderSettings.topBarHeight = it
             }
-            SliderRow("底部边距", ReaderSettings.bottomBarHeight, 0f..100f, 20, { "${it.toInt()}" }) {
+            SliderRow("底部边距", ReaderSettings.bottomBarHeight, 0f..100f, step = 4f, { "${it.toInt()}" }) {
                 ReaderSettings.bottomBarHeight = it
             }
-            SliderRow("左边距", ReaderSettings.leftPadding, 0f..50f, 25, { "${it.toInt()}" }) {
+            SliderRow("左边距", ReaderSettings.leftPadding, 0f..50f, step = 2f, { "${it.toInt()}" }) {
                 ReaderSettings.leftPadding = it
             }
-            SliderRow("右边距", ReaderSettings.rightPadding, 0f..50f, 25, { "${it.toInt()}" }) {
+            SliderRow("右边距", ReaderSettings.rightPadding, 0f..50f, step = 2f, { "${it.toInt()}" }) {
                 ReaderSettings.rightPadding = it
             }
 
@@ -244,7 +289,7 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
 
             // 12. 背景透明度（不持久化）
             SliderRow(
-                "背景透明度", ReaderSettings.backgroundOpacity, 0f..1f, 25,
+                "背景透明度", ReaderSettings.backgroundOpacity, 0f..1f, step = 0.05f,
                 { "${(it * 100).toInt()}%" },
             ) { ReaderSettings.backgroundOpacity = it }
 
@@ -268,11 +313,11 @@ fun ReaderSettingsSheet(html: Boolean, onDismiss: () -> Unit) {
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 SettingsLabel("自动滚动设置")
                 SliderRow(
-                    "滚动速度", ReaderSettings.autoScrollSpeed, 0.5f..3f, 10,
-                    { String.format("%.2f", it) },
+                    "滚动速度", ReaderSettings.autoScrollSpeed, 0.5f..3f, step = 0.1f,
+                    { String.format("%.1f", it) },
                 ) { ReaderSettings.autoScrollSpeed = it }
                 SliderRow(
-                    "滚动间隔(ms)", ReaderSettings.autoScrollInterval.toFloat(), 8f..32f, 6,
+                    "滚动间隔(ms)", ReaderSettings.autoScrollInterval.toFloat(), 8f..32f, step = 4f,
                     { "${it.toInt()}" },
                 ) { ReaderSettings.autoScrollInterval = it.toInt() }
             }
@@ -296,15 +341,26 @@ private fun SettingsLabel(text: String) {
     )
 }
 
+/** 把 [value] 吸附到 range 内 step 的最近整数倍（用于初值不在刻度上的兜底显示）。 */
+private fun snapToSteps(value: Float, range: ClosedFloatingPointRange<Float>, step: Float): Float {
+    val n = ((value - range.start) / step).roundToInt().coerceIn(0, ((range.endInclusive - range.start) / step).roundToInt())
+    return range.start + n * step
+}
+
+/**
+ * P0-5：`Slider.steps` 语义是「端点间分段数-1」，这里统一改传步长 [step]，
+ * 内部换算成 steps，保证滑杆只停在刻度上、标签值与落点一致。
+ */
 @Composable
 private fun SliderRow(
     label: String,
     value: Float,
     range: ClosedFloatingPointRange<Float>,
-    steps: Int,
+    step: Float,
     display: (Float) -> String,
     onChange: (Float) -> Unit,
 ) {
+    val steps = (((range.endInclusive - range.start) / step).roundToInt() - 1).coerceAtLeast(0)
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -312,10 +368,10 @@ private fun SliderRow(
         Text(
             "$label: ${display(value)}",
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(110.dp),
+            modifier = Modifier.widthIn(min = 110.dp),
         )
         Slider(
-            value = value,
+            value = value.coerceIn(range.start, range.endInclusive),
             onValueChange = onChange,
             valueRange = range,
             steps = steps,
@@ -364,14 +420,21 @@ private fun ThemeColorRow(
                     ).forEach { row ->
                         Row {
                             row.forEach { c ->
+                                // G-14：clickable 放外层 Box（48dp 热区），内层才是色块
                                 Box(
                                     Modifier
                                         .size(48.dp)
-                                        .padding(4.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(c)
+                                        .semantics { contentDescription = "颜色 #${Integer.toHexString(c.toArgb())}" }
                                         .clickable { apply(c); pickTarget = null },
-                                )
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(c),
+                                    )
+                                }
                             }
                         }
                     }

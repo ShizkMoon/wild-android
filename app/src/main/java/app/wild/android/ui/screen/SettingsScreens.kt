@@ -160,7 +160,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 卡片2：主题设置（RadioListTile 三选）
+            // 卡片2：主题设置（RadioListTile 三选；ListItem 行整行可点，Radio 不再重复挂 click）
             item {
                 SettingsCard(title = "主题设置") {
                     listOf(
@@ -168,18 +168,15 @@ fun SettingsScreen(
                         "浅色" to ThemeMode.LIGHT,
                         "深色" to ThemeMode.DARK,
                     ).forEach { (label, mode) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { scope.launch { settingsStore.setThemeMode(mode) } }
-                                .padding(horizontal = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(selected = themeMode == mode, onClick = {
+                        ListItem(
+                            leadingContent = {
+                                RadioButton(selected = themeMode == mode, onClick = null)
+                            },
+                            headlineContent = { Text(label) },
+                            modifier = Modifier.clickable {
                                 scope.launch { settingsStore.setThemeMode(mode) }
-                            })
-                            Text(label)
-                        }
+                            },
+                        )
                     }
                     Spacer(Modifier.height(8.dp))
                 }
@@ -198,6 +195,9 @@ fun SettingsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 8.dp),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                        ),
                         keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = {
                             scope.launch {
                                 settingsStore.setApiHost(apiHostInput)
@@ -363,7 +363,7 @@ fun AccountScreen(
             !loggedIn -> EmptyBlock("未登录", Modifier.padding(padding))
             detail.loading -> LoadingBlock(Modifier.padding(padding))
             detail.error != null && detail.data == null ->
-                ErrorBlock(detail.error!!, onRefresh = { vm.load() })
+                ErrorBlock(detail.error!!, onRefresh = { vm.load() }, modifier = Modifier.padding(padding))
             else -> LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
@@ -463,7 +463,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 Text("轻小说文库", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "版本 0.1.0+1",
+                    "版本 ${app.wild.android.BuildConfig.VERSION_NAME}+${app.wild.android.BuildConfig.VERSION_CODE}",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -1,5 +1,13 @@
 package app.wild.android.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -46,23 +53,27 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.theme.StatusBarIconAppearance
 import app.wild.android.ui.vm.ReaderViewModel
 import coil3.compose.SubcomposeAsyncImage
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -72,18 +83,26 @@ private sealed class ParsedBlock {
     data class Image(val url: String) : ParsedBlock()
 }
 
+/** `<!--image-->` 标记可嵌在文字行中间：按标记切开，保留前后文字段。 */
 private fun parseBlocks(content: String): List<ParsedBlock> =
-    content.split("\n")
-        .filter { it.isNotBlank() }
-        .map { raw ->
-            val m = IMAGE_MARK_REGEX.find(raw)
-            if (m != null) ParsedBlock.Image(m.groupValues[1]) else ParsedBlock.Text(raw)
+    content.split("\n").flatMap { raw ->
+        val parts = mutableListOf<ParsedBlock>()
+        var last = 0
+        for (m in IMAGE_MARK_REGEX.findAll(raw)) {
+            val before = raw.substring(last, m.range.first)
+            if (before.isNotBlank()) parts += ParsedBlock.Text(before)
+            parts += ParsedBlock.Image(m.groupValues[1])
+            last = m.range.last + 1
         }
+        val tail = raw.substring(last)
+        if (tail.isNotBlank()) parts += ParsedBlock.Text(tail)
+        parts
+    }
 
 /**
  * HTML 阅读器 `/novel/reader` reader_type=html（spec §2.9）：
- * extendBodyBehindAppBar 半透明 AppBar + 整章 ListView 滚动 + 图片 4:3 contain
- * + 尾部「上一章/下一章」+ 点正文切全屏 + 自动滚动。
+ * enterAlways AppBar + 整章 ListView 滚动 + 图片 4:3 contain
+ * + 尾部「上一章/下一章」+ 点正文切全屏 + 连续插值自动滚动。
  * Stage 4：目录/正文来自 [ReaderViewModel]（下载 → 缓存 → 网络三级）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,6 +126,9 @@ fun ScrollReaderScreen(
     }
     val bg = if (dark) ReaderSettings.darkBackgroundColor else ReaderSettings.lightBackgroundColor
     val fg = if (dark) ReaderSettings.darkTextColor else ReaderSettings.lightTextColor
+
+    // S-8：状态栏图标跟随阅读器底色
+    StatusBarIconAppearance(darkIcons = !dark)
 
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var autoScroll by remember { mutableStateOf(false) }
@@ -142,15 +164,24 @@ fun ScrollReaderScreen(
         onDispose { view.keepScreenOn = false }
     }
 
-    // 自动滚动：每 interval ms 前进 speed px，到底自停（spec F22）
+    // 自动滚动（M-7）：连续插值——速度语义不变（speed px / interval ms → px/ms），
+    // 每帧按 dt 位移；到底或滚不动时自停。
     LaunchedEffect(autoScroll, ReaderSettings.autoScrollSpeed, ReaderSettings.autoScrollInterval) {
+        if (!autoScroll) return@LaunchedEffect
+        val velocityPxPerMs = ReaderSettings.autoScrollSpeed / ReaderSettings.autoScrollInterval
+        var lastFrame = 0L
         while (autoScroll) {
+            withFrameNanos { now ->
+                if (lastFrame == 0L) { lastFrame = now; return@withFrameNanos }
+                val dtMs = ((now - lastFrame) / 1_000_000f).coerceAtMost(100f)
+                lastFrame = now
+                listState.dispatchRawDelta(velocityPxPerMs * dtMs)
+            }
             val info = listState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()
-            val canScroll = last != null && (last.index < info.totalItemsCount - 1 || last.offset + last.size > info.viewportEndOffset)
+            val canScroll = last != null &&
+                (last.index < info.totalItemsCount - 1 || last.offset + last.size > info.viewportEndOffset)
             if (!canScroll) { autoScroll = false; fullscreen = false; break }
-            listState.scroll { scrollBy(ReaderSettings.autoScrollSpeed) }
-            delay(ReaderSettings.autoScrollInterval.toLong())
         }
     }
 
@@ -194,12 +225,29 @@ fun ScrollReaderScreen(
         }
     }
 
+    // S-2：AppBar 不再用任意 alpha；静止=阅读器 bg，滚动中=bg 上浮一层 fg 淡色
+    // （阅读器自有配色体系内的层级表达，替代 surfaceContainer token）
+    val appBarScrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val scrolledBg = remember(bg, fg) { fg.copy(alpha = 0.06f).compositeOver(bg) }
+
     Scaffold(
         containerColor = bg,
+        modifier = Modifier.nestedScroll(appBarScrollBehavior.nestedScrollConnection),
         topBar = {
-            if (!fullscreen) {
+            // M-4：slide+fade 进出替代 if 硬挂载
+            AnimatedVisibility(
+                visible = !fullscreen,
+                enter = slideInVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium)) { -it } + fadeIn(tween(150)),
+                exit = slideOutVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium)) { -it } + fadeOut(tween(150)),
+            ) {
                 TopAppBar(
-                    title = { Text(flat.getOrNull(currentIndex)?.second?.title ?: st.novelName) },
+                    title = {
+                        Text(
+                            flat.getOrNull(currentIndex)?.second?.title ?: st.novelName,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") }
                     },
@@ -218,8 +266,10 @@ fun ScrollReaderScreen(
                             Icon(Icons.AutoMirrored.Outlined.MenuBook, "目录")
                         }
                     },
+                    scrollBehavior = appBarScrollBehavior,
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = bg.copy(alpha = 0.8f),
+                        containerColor = bg,
+                        scrolledContainerColor = scrolledBg,
                         titleContentColor = fg,
                         navigationIconContentColor = fg,
                         actionIconContentColor = fg,
@@ -262,7 +312,8 @@ fun ScrollReaderScreen(
                         start = ReaderSettings.leftPadding.dp,
                         end = ReaderSettings.rightPadding.dp,
                         top = padding.calculateTopPadding() + ReaderSettings.topBarHeight.dp,
-                        bottom = ReaderSettings.bottomBarHeight.dp,
+                        // G-5：底部 = 系统导航条 inset + 阅读器底边距，不覆盖丢弃
+                        bottom = padding.calculateBottomPadding() + ReaderSettings.bottomBarHeight.dp,
                     ),
                 ) {
                     itemsIndexed(blocks) { i, block ->
@@ -276,13 +327,16 @@ fun ScrollReaderScreen(
                                     letterSpacing = 0.5.sp,
                                     color = fg,
                                 ),
-                                modifier = Modifier.padding(bottom = ReaderSettings.paragraphSpacing.dp),
+                                modifier = Modifier
+                                    .padding(bottom = ReaderSettings.paragraphSpacing.dp)
+                                    .animateItem(),
                             )
                             is ParsedBlock.Image -> Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .aspectRatio(4f / 3f)
-                                    .padding(vertical = ReaderSettings.paragraphSpacing.dp),
+                                    .padding(vertical = ReaderSettings.paragraphSpacing.dp)
+                                    .animateItem(),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 SubcomposeAsyncImage(
@@ -296,18 +350,26 @@ fun ScrollReaderScreen(
                         }
                     }
                     item {
-                        Spacer(Modifier.height(32.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            TextButton(
-                                onClick = { if (currentIndex > 0) vm.goTo(currentIndex - 1) },
-                                enabled = currentIndex > 0,
-                            ) { Text("上一章", color = fg) }
-                            TextButton(
-                                onClick = { if (currentIndex < flat.size - 1) vm.goTo(currentIndex + 1) },
-                                enabled = currentIndex < flat.size - 1,
-                            ) { Text("下一章", color = fg) }
+                        Column(Modifier.animateItem()) {
+                            Spacer(Modifier.height(32.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                val prevEnabled = currentIndex > 0
+                                TextButton(
+                                    onClick = { if (prevEnabled) vm.goTo(currentIndex - 1) },
+                                    enabled = prevEnabled,
+                                ) {
+                                    Text("上一章", color = if (prevEnabled) fg else fg.copy(alpha = 0.38f))
+                                }
+                                val nextEnabled = currentIndex < flat.size - 1
+                                TextButton(
+                                    onClick = { if (nextEnabled) vm.goTo(currentIndex + 1) },
+                                    enabled = nextEnabled,
+                                ) {
+                                    Text("下一章", color = if (nextEnabled) fg else fg.copy(alpha = 0.38f))
+                                }
+                            }
+                            Spacer(Modifier.height(32.dp))
                         }
-                        Spacer(Modifier.height(32.dp))
                     }
                 }
             }
@@ -319,7 +381,7 @@ fun ScrollReaderScreen(
             volumes = st.volumes,
             currentCid = flat.getOrNull(currentIndex)?.second?.cid ?: cid,
             heightFraction = 0.8f,
-            currentHighlightColor = Color.Transparent, // HTML 阅读器：当前章 primary 色（spec §2.11）
+            currentHighlightColor = null, // HTML 阅读器：当前章 primary 字色（spec §2.11）
             onDismiss = { showCatalog = false },
             onSelect = { sel ->
                 showCatalog = false

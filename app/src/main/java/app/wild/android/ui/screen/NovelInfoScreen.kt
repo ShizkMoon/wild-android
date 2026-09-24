@@ -1,5 +1,12 @@
 package app.wild.android.ui.screen
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +17,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,11 +29,14 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Update
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -38,13 +49,17 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +75,9 @@ import app.wild.android.data.remote.Volume
 import app.wild.android.ui.components.CoverImage
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.contentColumnMaxWidth
+import app.wild.android.ui.components.novelCoverSharedElement
+import app.wild.android.ui.components.novelTitleSharedBounds
+import app.wild.android.ui.theme.CardOutline
 import app.wild.android.ui.vm.NovelDetailState
 import app.wild.android.ui.vm.NovelInfoViewModel
 import kotlinx.coroutines.launch
@@ -109,20 +127,26 @@ fun NovelInfoScreen(
                     }
                 },
                 actions = {
-                    if (!state.loading && state.error == null) {
-                        IconButton(onClick = onDownload) {
-                            Icon(Icons.Outlined.Download, "下载")
-                        }
-                        IconButton(onClick = {
-                            vm.toggleBookshelf { msg ->
-                                scope.launch { snackbar.showSnackbar(msg) }
+                    // M-10：操作钮随内容就绪淡入，不瞬现
+                    AnimatedVisibility(
+                        visible = !state.loading && state.error == null,
+                        enter = fadeIn(),
+                    ) {
+                        Row {
+                            IconButton(onClick = onDownload) {
+                                Icon(Icons.Outlined.Download, "下载")
                             }
-                        }) {
-                            Icon(
-                                if (state.inBookshelf) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
-                                contentDescription = "书架",
-                                tint = if (state.inBookshelf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            IconButton(onClick = {
+                                vm.toggleBookshelf { msg ->
+                                    scope.launch { snackbar.showSnackbar(msg) }
+                                }
+                            }) {
+                                Icon(
+                                    if (state.inBookshelf) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
+                                    contentDescription = "书架",
+                                    tint = if (state.inBookshelf) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 },
@@ -135,7 +159,12 @@ fun NovelInfoScreen(
                 CircularProgressIndicator()
             }
             state.info == null && state.error != null ->
-                ErrorBlock(state.error!!, title = "详情加载失败", onRefresh = { vm.load() })
+                ErrorBlock(
+                    state.error!!,
+                    title = "详情加载失败",
+                    onRefresh = { vm.load() },
+                    modifier = Modifier.padding(padding),
+                )
             else -> {
                 val info = state.info!!
                 val sizeClass = currentWindowAdaptiveInfo().windowSizeClass
@@ -164,8 +193,8 @@ fun NovelInfoScreen(
                                 .weight(1.2f),
                         ) {
                             state.volumes.forEach { volume ->
-                                item {
-                                    VolumeCard(volume, onChapterClick)
+                                item(key = "v-${volume.volumeId}") {
+                                    VolumeCard(volume, onChapterClick, Modifier.animateItem())
                                 }
                             }
                             item { Spacer(Modifier.height(24.dp)) }
@@ -184,11 +213,12 @@ fun NovelInfoScreen(
                             }
                         }
                         state.volumes.forEach { volume ->
-                            item {
+                            item(key = "v-${volume.volumeId}") {
                                 Box(
                                     modifier = Modifier
                                         .widthIn(max = maxWidth)
-                                        .fillMaxWidth(),
+                                        .fillMaxWidth()
+                                        .animateItem(),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     VolumeCard(volume, onChapterClick)
@@ -249,21 +279,35 @@ private fun NovelHeader(info: NovelInfo, onAuthorClick: (String) -> Unit) {
             modifier = Modifier
                 .width(120.dp)
                 .aspectRatio(120f / 160f)
+                // M-2：列表封面 → 详情头图共享元素
+                .novelCoverSharedElement(info.aid)
                 .clip(RoundedCornerShape(8.dp)),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = CardOutline,
         ) { CoverImage(info.title, info.coverUrl) }
         Spacer(Modifier.width(16.dp))
         Column {
-            Text(info.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                info.title,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.novelTitleSharedBounds(info.aid),
+            )
             Spacer(Modifier.height(4.dp))
+            // G-13：作者链接给足 48dp 触控目标
             Text(
                 "作者：${info.author}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.primary,
                 textDecoration = TextDecoration.Underline,
-                modifier = Modifier.clickable { onAuthorClick(info.author) },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .clickable { onAuthorClick(info.author) },
             )
-            Spacer(Modifier.height(4.dp))
-            Text("状态：${info.status}", style = MaterialTheme.typography.bodyMedium)
+            Text("状态：${info.status}", style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (info.isAnimated) {
                 Spacer(Modifier.height(4.dp))
                 Text("动画化", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
@@ -291,13 +335,16 @@ private fun StatRow(info: NovelInfo, onReviews: () -> Unit) {
 
 @Composable
 private fun StatItem(icon: @Composable () -> Unit, text: String, onClick: (() -> Unit)? = null) {
+    // G-13：统计项 48dp 触控目标
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
     ) {
         icon()
         Spacer(Modifier.width(4.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
+        Text(text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -312,17 +359,24 @@ private fun TagWrap(info: NovelInfo, onTagClick: (String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         info.tags.forEach { tag ->
+            // G-13：标签 chip 触控 ≥48dp
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier.clickable { onTagClick(tag) },
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .clickable { onTagClick(tag) },
             ) {
-                Text(
-                    tag,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.labelMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                )
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        tag,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                    )
+                }
             }
         }
     }
@@ -378,25 +432,63 @@ fun HtmlLite(html: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun VolumeCard(volume: Volume, onChapterClick: (Int) -> Unit) {
+private fun VolumeCard(volume: Volume, onChapterClick: (Int) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by rememberSaveable(volume.volumeId) { mutableStateOf(true) }
+    // §3.3：卷章卡 surfaceContainerLow + outlineVariant 描边
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .animateContentSize(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = CardOutline,
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(volume.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            HorizontalDivider(Modifier.padding(top = 8.dp))
-            volume.chapters.forEach { ch ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onChapterClick(ch.cid) }
-                        .padding(horizontal = 0.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(ch.title, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    volume.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "收起" else "展开",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow)) + fadeIn(),
+                exit = shrinkVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow)),
+            ) {
+                Column {
+                    HorizontalDivider(Modifier.padding(top = 8.dp))
+                    volume.chapters.forEach { ch ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onChapterClick(ch.cid) }
+                                .padding(horizontal = 0.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                ch.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        }
+                    }
                 }
             }
         }

@@ -94,7 +94,7 @@ fun ReviewsScreen(
                     CircularProgressIndicator()
                 }
             paged.error != null && paged.items.isEmpty() ->
-                ErrorBlock(paged.error!!, onRefresh = { vm.refresh() })
+                ErrorBlock(paged.error!!, onRefresh = { vm.refresh() }, modifier = Modifier.padding(padding))
             paged.items.isEmpty() -> EmptyBlock("暂无评论", Modifier.padding(padding))
             else -> PullToRefreshBox(
                 isRefreshing = refreshing,
@@ -104,14 +104,20 @@ fun ReviewsScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(vertical = 8.dp),
+                    // G-15：底部余量 + 横向 16dp 归 contentPadding；M-5：key + animateItem
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    itemsIndexed(paged.items) { _, r ->
+                    itemsIndexed(paged.items, key = { _, r -> r.rid }) { _, r ->
                         Card(
                             modifier = Modifier
                                 .contentColumnWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                .padding(vertical = 8.dp)
+                                .animateItem(),
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            ),
+                            border = app.wild.android.ui.theme.CardOutline,
                         ) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -126,8 +132,18 @@ fun ReviewsScreen(
                                     }
                                     Spacer(Modifier.size(8.dp))
                                     Column {
-                                        Text(r.userName, style = MaterialTheme.typography.titleMedium)
-                                        Text(r.time, style = MaterialTheme.typography.bodySmall)
+                                        Text(
+                                            r.userName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        )
+                                        // 时间降层：onSurfaceVariant
+                                        Text(
+                                            r.time,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
                                     }
                                 }
                                 Spacer(Modifier.height(8.dp))

@@ -1,5 +1,13 @@
 package app.wild.android.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -12,17 +20,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -64,15 +76,20 @@ import androidx.compose.ui.unit.sp
 import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.ui.components.ErrorBlock
 import app.wild.android.ui.components.LoadingBlock
+import app.wild.android.ui.theme.StatusBarIconAppearance
 import app.wild.android.ui.vm.ReaderViewModel
 import coil3.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
+/** 翻页位移动画：spring 无 overshoot（spec §4.1）。 */
+private val PageSpring = spring<Float>(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium)
+
 /**
  * 普通阅读器 `/novel/reader` reader_type=normal（spec §2.8）：
- * 背景 + 水平分页 PageView + 点击三区翻页 + 顶部控制栏（黑 0.7）+ 目录/设置弹层。
+ * 背景 + 水平分页 PageView + 点击三区翻页 + 顶部覆盖栏（阅读器 bg×0.92 + 细线）
+ * + 目录/设置弹层。
  * 分页算法见 [paginate]；进度 = 累计文本字数锚点（spec 决策 C）。
  * Stage 4：目录/正文来自 [ReaderViewModel]（下载 → 缓存 → 网络三级）。
  */
@@ -98,6 +115,9 @@ fun PagedReaderScreen(
     }
     val bg = if (dark) ReaderSettings.darkBackgroundColor else ReaderSettings.lightBackgroundColor
     val fg = if (dark) ReaderSettings.darkTextColor else ReaderSettings.lightTextColor
+
+    // S-8：阅读器自带配色时状态栏图标跟着阅读器底走（深色底→浅色图标）
+    StatusBarIconAppearance(darkIcons = !dark)
 
     // 打开阅读器时保持亮屏（spec F24，默认关）
     val view = LocalView.current
@@ -143,10 +163,8 @@ fun PagedReaderScreen(
             val fontSize = ReaderSettings.fontSize
             val lineHeight = ReaderSettings.lineHeight
 
+            // G-1：测量/渲染同一宽度合同 w-L-R
             val canvasWPx = wPx - leftPadPx - rightPadPx
-            // 页码行高预留：n/m 计数器(10sp) + 上下间距，避免满页文字把它挤出屏幕（验收低 #10）
-            val counterPx = with(density) { (10.sp.toPx() * 1.6f) + 12.dp.toPx() }
-            val canvasHPx = hPx - topBarPx - bottomBarPx - counterPx
 
             val content = st.content ?: ""
             val textStyle = remember(fontSize, lineHeight, fg) {
@@ -157,12 +175,35 @@ fun PagedReaderScreen(
                     color = fg,
                 )
             }
+            // G-2：首页首段按标题样式测量，与 TextPage 的渲染样式同一合同
+            val titleStyle = remember(textStyle) {
+                textStyle.copy(fontSize = (fontSize + 2f).sp, fontWeight = FontWeight.Bold)
+            }
+            // G-4：页码行高按 caption 样式实测，不再用估算常量
+            val counterStyle = remember(fg) {
+                TextStyle(fontSize = 10.sp, color = fg)
+            }
+            val counterPx = remember(counterStyle, canvasWPx) {
+                measurer.measure(
+                    AnnotatedString("000/000"), counterStyle,
+                    constraints = Constraints(maxWidth = canvasWPx.toInt().coerceAtLeast(1)),
+                ).size.height.toFloat() + with(density) { 12.dp.toPx() }
+            }
+            val canvasHPx = hPx - topBarPx - bottomBarPx - counterPx
 
-            val pages = remember(content, canvasWPx, canvasHPx, textStyle, spacingPx) {
-                paginate(content, canvasHPx) { text ->
+            // G-6：空页保底截断所需的最小行高（单行实测）
+            val minLineHeightPx = remember(textStyle, canvasWPx) {
+                measurer.measure(
+                    AnnotatedString("字"), textStyle,
+                    constraints = Constraints(maxWidth = canvasWPx.toInt().coerceAtLeast(1)),
+                ).size.height.toFloat()
+            }
+
+            val pages = remember(content, canvasWPx, canvasHPx, textStyle, titleStyle, spacingPx) {
+                paginate(content, canvasHPx, minLineHeightPx) { isTitle, text ->
                     val layout = measurer.measure(
                         AnnotatedString(text),
-                        textStyle,
+                        if (isTitle) titleStyle else textStyle,
                         constraints = Constraints(maxWidth = canvasWPx.toInt().coerceAtLeast(1)),
                     )
                     ParagraphMeasure(
@@ -210,13 +251,13 @@ fun PagedReaderScreen(
                 ReaderSettings.volumeKeyHandler = { dir ->
                     if (dir > 0) {
                         if (pagerState.currentPage < pages.size - 1) {
-                            scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
+                            scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1, animationSpec = PageSpring) }
                         } else if (currentIndex < flat.size - 1) {
                             vm.goTo(currentIndex + 1)
                         }
                     } else {
                         if (pagerState.currentPage > 0) {
-                            scope.launch { pagerState.scrollToPage(pagerState.currentPage - 1) }
+                            scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1, animationSpec = PageSpring) }
                         } else if (currentIndex > 0) {
                             vm.goTo(currentIndex - 1)
                         }
@@ -236,7 +277,7 @@ fun PagedReaderScreen(
                             when {
                                 x < 0.3f || y < 0.3f -> {
                                     if (pagerState.currentPage > 0) {
-                                        scope.launch { pagerState.scrollToPage(pagerState.currentPage - 1) }
+                                        scope.launch { pagerState.animateScrollToPage(pagerState.currentPage - 1, animationSpec = PageSpring) }
                                     } else {
                                         val now = System.currentTimeMillis()
                                         if (now - lastPrevTapAt < 2000) {
@@ -249,7 +290,7 @@ fun PagedReaderScreen(
                                 }
                                 x > 0.7f || y > 0.7f -> {
                                     if (pagerState.currentPage < pages.size - 1) {
-                                        scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
+                                        scope.launch { pagerState.animateScrollToPage(pagerState.currentPage + 1, animationSpec = PageSpring) }
                                     } else if (currentIndex < flat.size - 1) {
                                         vm.goTo(currentIndex + 1)
                                     }
@@ -298,17 +339,20 @@ fun PagedReaderScreen(
                                     pageCount = pages.size,
                                     topPad = topBarPx, bottomPad = bottomBarPx,
                                     leftPad = leftPadPx, rightPad = rightPadPx,
+                                    counterStyle = counterStyle,
                                     density = density, fg = fg,
                                 )
                             } else {
                                 TextPage(
                                     text = page.content,
                                     style = textStyle,
+                                    titleStyle = titleStyle,
                                     spacingPx = spacingPx,
                                     pageNum = pageIndex + 1,
                                     pageCount = pages.size,
                                     topPad = topBarPx, bottomPad = bottomBarPx,
                                     leftPad = leftPadPx, rightPad = rightPadPx,
+                                    counterStyle = counterStyle,
                                     density = density,
                                 )
                             }
@@ -316,36 +360,51 @@ fun PagedReaderScreen(
                     }
                 }
             }
+        }
+    }
 
-            // 顶部控制栏（黑 0.7，无底部栏）
-            if (showControls) {
+    // 顶部覆盖栏（G-3/S-1）：Scaffold 之外自绘并自行消费一次状态栏 inset；
+    // 底 = 阅读器 bg×0.92 + 底缘 outlineVariant 细线，图标取阅读器 fg（§3.3④）。
+    // M-4：slide+fade 进出替代硬挂载。
+    Box(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = showControls,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = slideInVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium)) { -it } + fadeIn(tween(150)),
+            exit = slideOutVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium)) { -it } + fadeOut(tween(150)),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bg.copy(alpha = 0.92f)),
+            ) {
                 Row(
                     modifier = Modifier
-                        .align(Alignment.TopCenter)
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.7f))
                         .statusBarsPadding()
+                        .heightIn(min = 56.dp)
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回", tint = fg)
                     }
                     Text(
                         flat.getOrNull(currentIndex)?.second?.title ?: st.novelName,
-                        color = Color.White,
+                        color = fg,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = { showCatalog = true }) {
-                        Icon(Icons.AutoMirrored.Outlined.MenuBook, "目录", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Outlined.MenuBook, "目录", tint = fg)
                     }
                     IconButton(onClick = { showSettings = true }) {
-                        Icon(Icons.Outlined.Settings, "设置", tint = Color.White)
+                        Icon(Icons.Outlined.Settings, "设置", tint = fg)
                     }
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
     }
@@ -355,7 +414,7 @@ fun PagedReaderScreen(
             volumes = st.volumes,
             currentCid = flat.getOrNull(currentIndex)?.second?.cid ?: cid,
             heightFraction = 0.9f,
-            currentHighlightColor = Color.Gray.copy(alpha = 0.3f),
+            currentHighlightColor = MaterialTheme.colorScheme.surfaceContainerHighest,
             onDismiss = { showCatalog = false },
             onSelect = { sel ->
                 showCatalog = false
@@ -373,6 +432,7 @@ fun PagedReaderScreen(
 private fun TextPage(
     text: String,
     style: TextStyle,
+    titleStyle: TextStyle,
     spacingPx: Float,
     pageNum: Int,
     pageCount: Int,
@@ -380,32 +440,36 @@ private fun TextPage(
     bottomPad: Float,
     leftPad: Float,
     rightPad: Float,
+    counterStyle: TextStyle,
     density: androidx.compose.ui.unit.Density,
 ) {
     Column(Modifier.fillMaxSize()) {
         Spacer(Modifier.height(with(density) { topPad.toDp() }))
         val paragraphs = text.split("\n")
-        Column(
-            modifier = Modifier
-                .padding(horizontal = with(density) { leftPad.toDp() }),
+        // 正文可选择复制（spec 可读性项）；G-1：左右边距各自生效
+        SelectionContainer(
+            modifier = Modifier.padding(
+                start = with(density) { leftPad.toDp() },
+                end = with(density) { rightPad.toDp() },
+            ),
         ) {
-            paragraphs.forEachIndexed { i, p ->
-                val isTitle = pageNum == 1 && i == 0 // 原 App：每章正文首行显示章节标题
-                Text(
-                    p,
-                    style = style.copy(
-                        fontSize = if (isTitle) (style.fontSize.value + 2f).sp else style.fontSize,
-                        fontWeight = if (isTitle) FontWeight.Bold else style.fontWeight,
-                    ),
-                )
-                if (i < paragraphs.lastIndex) {
-                    Spacer(Modifier.height(with(density) { spacingPx.toDp() }))
+            Column {
+                paragraphs.forEachIndexed { i, p ->
+                    val isTitle = pageNum == 1 && i == 0 // 原 App：每章正文首行显示章节标题
+                    Text(
+                        p,
+                        style = if (isTitle) titleStyle else style,
+                    )
+                    if (i < paragraphs.lastIndex) {
+                        Spacer(Modifier.height(with(density) { spacingPx.toDp() }))
+                    }
                 }
             }
         }
         Spacer(Modifier.weight(1f))
         Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-            Text("$pageNum/$pageCount", fontSize = 10.sp, color = style.color, modifier = Modifier.alpha(0.3f))
+            // G-4/可读性：页码按实测预留，alpha 0.3→0.6
+            Text("$pageNum/$pageCount", style = counterStyle, modifier = Modifier.alpha(0.6f))
         }
         Spacer(Modifier.height(with(density) { bottomPad.toDp() }))
     }
@@ -421,6 +485,7 @@ private fun ImagePage(
     bottomPad: Float,
     leftPad: Float,
     rightPad: Float,
+    counterStyle: TextStyle,
     density: androidx.compose.ui.unit.Density,
     fg: Color,
 ) {
@@ -430,7 +495,10 @@ private fun ImagePage(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(horizontal = with(density) { leftPad.toDp() }),
+                .padding(
+                    start = with(density) { leftPad.toDp() },
+                    end = with(density) { rightPad.toDp() },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             SubcomposeAsyncImage(
@@ -442,21 +510,21 @@ private fun ImagePage(
             )
         }
         Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
-            Text("$pageNum/$pageCount", fontSize = 10.sp, color = fg, modifier = Modifier.alpha(0.3f))
+            Text("$pageNum/$pageCount", style = counterStyle, color = fg, modifier = Modifier.alpha(0.6f))
         }
         Spacer(Modifier.height(with(density) { bottomPad.toDp() }))
     }
 }
 
-/** 插图加载失败兜底：确定的渐变天空 + 山形剪影。 */
+/** 插图加载失败兜底：确定的渐变天空 + 山形剪影（G-17：clip 先于绘制，圆角真正生效）。 */
 @Composable
 fun MockIllustration(seed: String, modifier: Modifier = Modifier) {
-    val p = remember(seed) { seed.hashCode().let { if (it < 0) -it else it } }
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .padding(16.dp)
-            .background(Color(0xFF1B2440), RoundedCornerShape(8.dp)),
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF1B2440)),
     ) {
         drawRect(
             Brush.verticalGradient(listOf(Color(0xFF2B3A67), Color(0xFF8E9CC0)))

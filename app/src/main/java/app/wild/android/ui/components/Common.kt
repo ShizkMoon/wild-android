@@ -1,7 +1,8 @@
 package app.wild.android.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,7 +22,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,10 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -55,7 +56,6 @@ import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.window.core.layout.WindowSizeClass
 import app.wild.android.data.remote.NovelCover
 import coil3.compose.SubcomposeAsyncImage
-import kotlin.math.abs
 
 /** 封面网格统一纵横比（spec：207/307 ≈ 0.674；书架页用 0.7）。 */
 const val COVER_ASPECT = 207f / 307f
@@ -116,28 +116,34 @@ fun CoverImage(title: String, url: String? = null, modifier: Modifier = Modifier
 @Composable
 private fun CoverPlaceholder(title: String, modifier: Modifier = Modifier) {
     val palette = remember(title) { coverPalette(title) }
+    // S-9：浅金/浅青等亮调色板上白字对比不及格——按底色亮度选字形色
+    val glyphColor = remember(palette) {
+        if (palette[0].luminance() > 0.45f) Color(0xFF1C1B1F) else Color.White.copy(alpha = 0.95f)
+    }
     Box(modifier = modifier) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawRect(Brush.linearGradient(listOf(palette[0], palette[1])))
             clipRect {
-                // 斜向装饰块，模拟轻小说封面的插画色块感
+                // S-9：柔和弧形色块替代楔形折线（楔形左缘收 0 读作任意多边形）
                 val w = size.width
                 val h = size.height
-                val path = Path().apply {
-                    moveTo(0f, h)
-                    lineTo(w * 0.55f, h * 0.45f)
-                    lineTo(w, h * 0.45f)
-                    lineTo(w, h)
-                    close()
-                }
-                drawPath(path, palette[2].copy(alpha = 0.35f))
+                drawCircle(
+                    palette[2].copy(alpha = 0.35f),
+                    radius = w * 0.75f,
+                    center = Offset(w * 0.85f, h * 0.78f),
+                )
+                drawCircle(
+                    palette[2].copy(alpha = 0.2f),
+                    radius = w * 0.45f,
+                    center = Offset(w * 0.08f, h * 0.62f),
+                )
             }
         }
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(
                 title.take(1),
                 style = TextStyle(fontSize = 28.sp, fontWeight = FontWeight.Bold),
-                color = Color.White.copy(alpha = 0.9f),
+                color = glyphColor,
             )
         }
     }
@@ -155,11 +161,13 @@ private val COVER_PALETTES = listOf(
 )
 
 private fun coverPalette(title: String): List<Color> =
-    COVER_PALETTES[abs(title.hashCode()) % COVER_PALETTES.size]
+    // hashCode() = Int.MIN_VALUE 时 abs 仍为负 → 用 mod 取正余数（修崩溃边界）
+    COVER_PALETTES[title.hashCode().mod(COVER_PALETTES.size)]
 
 /**
- * `_NovelCoverCard` 复刻（spec §5）：Card(elevation .5, radius 4)
- * + Expanded 封面 + Padding(4) 标题 12sp w500 单行省略。
+ * `_NovelCoverCard`（SZKM-67 §3.1/§6.2）：Card(onClick) 语义点击 +
+ * medium(12dp) 形状 + L1 `surfaceContainerLowest` + outlineVariant 细描边（不投影），
+ * 标题 bodyMedium 单行省略、8dp 内边距。
  */
 @Composable
 fun NovelCoverCard(
@@ -169,8 +177,13 @@ fun NovelCoverCard(
     aspect: Float = COVER_ASPECT,
 ) {
     Card(
-        modifier = modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(4.dp),
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ),
+        border = app.wild.android.ui.theme.CardOutline,
     ) {
         Column {
             CoverImage(
@@ -178,15 +191,16 @@ fun NovelCoverCard(
                 novel.coverUrl,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(aspect),
+                    .aspectRatio(aspect)
+                    .novelCoverSharedElement(novel.aid),
             )
             Text(
                 novel.title,
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.W500,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(4.dp),
+                modifier = Modifier.padding(8.dp),
             )
         }
     }
@@ -195,6 +209,7 @@ fun NovelCoverCard(
 /**
  * 统一错误块（spec 附录 F.1）：RefreshIndicator + 居中大图标(48,grey)
  * + 「{title}（下拉刷新）」+ 消息。
+ * SZKM-67 G-9：增加 [modifier]，调用方传入 Scaffold padding，避免画进 TopAppBar 之下。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -202,13 +217,14 @@ fun ErrorBlock(
     message: String,
     title: String = "加载失败",
     onRefresh: () -> Unit = {},
+    modifier: Modifier = Modifier,
 ) {
     // CF 验证失败类错误给「打开站点验证」直达入口（SZKM-68：不再死胡同）。
     val showVerifyAction = message.contains("验证") || message.contains("Cloudflare")
     PullToRefreshBox(
         isRefreshing = false,
         onRefresh = onRefresh,
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
     ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -259,9 +275,10 @@ fun EmptyBlock(text: String, modifier: Modifier = Modifier) {
 }
 
 /**
- * 通用封面网格（spec F12）：padding 8 / spacing 8 / 207:307。
+ * 通用封面网格（spec F12）：外边距 12 / spacing 8 / 207:307（SZKM-67 §3.2）。
  * [hasMore]+[loadingMore]+[onLoadMore] = 真实分页无限滚动（距底 ≤6 格触发），
  * 末行放 loading 格；[columns] 由调用方按窗口宽度给出（宽屏 >3 列）。
+ * items 带 key + animateItem spring（M-5）。
  */
 @Composable
 fun NovelGrid(
@@ -291,12 +308,21 @@ fun NovelGrid(
         columns = GridCells.Fixed(columns),
         state = gridState,
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(8.dp),
+        contentPadding = PaddingValues(12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(novels.size) { i ->
-            NovelCoverCard(novels[i], onClick = { onNovelClick(novels[i]) }, aspect = aspect)
+        items(novels.size, key = { novels[it].aid }) { i ->
+            NovelCoverCard(
+                novels[i],
+                onClick = { onNovelClick(novels[i]) },
+                aspect = aspect,
+                modifier = Modifier.animateItem(
+                    fadeInSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                    placementSpec = spring(Spring.DampingRatioLowBouncy, Spring.StiffnessMediumLow),
+                    fadeOutSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium),
+                ),
+            )
         }
         if (hasMore) {
             item {
@@ -311,16 +337,22 @@ fun NovelGrid(
     }
 }
 
-/** 列表项标题 + 值行（账户页用）：80dp 灰标签 + w500 值。 */
+/** 列表项标题 + 值行（账户页用，G-19）：标签自适应限宽两行，长 key 不顶值。 */
 @Composable
 fun InfoRow(label: String, value: String) {
     Row(modifier = Modifier.padding(vertical = 4.dp)) {
-        Text(label, modifier = Modifier.width(80.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.width(4.dp))
+        Text(
+            label,
+            modifier = Modifier.weight(2f, fill = false).widthIn(max = 140.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.width(12.dp))
         Text(
             value.ifEmpty { "未设置" },
             fontWeight = FontWeight.W500,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(3f),
         )
     }
 }

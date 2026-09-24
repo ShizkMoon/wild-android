@@ -69,8 +69,14 @@ class Wenku8Client(
     private val cookieJar = object : CookieJar {
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
             val now = System.currentTimeMillis()
-            return cookies.values
+            val sendable = cookies.values
                 .filter { domainMatches(it.domain, url.host) && !it.isExpired(now) }
+            // 运行中自检：同域请求实际不再携带 cf_clearance（如 TTL 到期/被删）
+            // 时复位标记，避免守卫误以为「有证」而跳过隐藏重解。
+            if (isWenku8Host(url.host) || url.host.equals(apiHostName, ignoreCase = true)) {
+                _hasClearance.value = sendable.any { it.name == "cf_clearance" }
+            }
+            return sendable
                 .map { c ->
                     Cookie.Builder()
                         .name(c.name).value(c.value)
@@ -248,6 +254,31 @@ class Wenku8Client(
             runCatching {
                 android.webkit.CookieManager.getInstance().removeAllCookies(null)
                 android.webkit.CookieManager.getInstance().flush()
+            }
+        }
+    }
+
+    /**
+     * 丢弃 cf_clearance（服务端作废后重解前置）：内存 + Room + WebView
+     * CookieManager 三处同清，并复位 hasClearance——不清 WebView 侧会让
+     * solveHidden 的 baseline 判新被旧值干扰（旧值=baseline，永远等不到「新值」）。
+     * [url] 用于定位 host；空串回退 apiHost。
+     */
+    suspend fun invalidateClearance(url: String = "") {
+        val host = url.substringAfter("://").substringBefore('/')
+            .ifEmpty { apiHost().substringAfter("://").substringBefore('/') }
+        val root = host.split('.').takeLast(2).joinToString(".")
+        cookies.keys.filter { it.substringAfter('|') == "cf_clearance" }
+            .forEach { cookies.remove(it) }
+        cookieDao.deleteClearance()
+        _hasClearance.value = false
+        withContext(Dispatchers.Main) {
+            runCatching {
+                val cm = android.webkit.CookieManager.getInstance()
+                // 过期写空值覆盖两处可能的存储位置（host / 根域）
+                cm.setCookie("https://$host/", "cf_clearance=; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                cm.setCookie("https://$root/", "cf_clearance=; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+                cm.flush()
             }
         }
     }

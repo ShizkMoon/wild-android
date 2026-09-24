@@ -177,16 +177,19 @@ class CfSession(
             lastChallengeUrl = e2.url
             android.util.Log.d(tag, "retry still challenged on ${e2.url} (hardBlock=${e2.hardBlock})")
             // 手上的 clearance 可能已被服务端作废（最常见情形）：
-            // 非硬阻断时先试一次隐藏重新求解，失败才升级可见验证页。
-            if (!e2.hardBlock && !suppressed() &&
-                solveHidden(lastChallengeUrl.orEmpty(), hardBlock = false)
-            ) {
-                try {
-                    return block()
-                } catch (e3: CfChallengeException) {
-                    lastChallengeUrl = e3.url
-                    android.util.Log.d(tag, "re-solve retry still challenged on ${e3.url} → NeedsUser")
-                    if (!awaitUserVerification(mark = e3.hardBlock)) throw e3
+            // 非硬阻断时先丢弃旧证再跑一次隐藏重解，失败才升级可见验证页。
+            if (!e2.hardBlock && !suppressed()) {
+                client.invalidateClearance(lastChallengeUrl.orEmpty())
+                if (solveHidden(lastChallengeUrl.orEmpty(), hardBlock = false, force = true)) {
+                    try {
+                        return block()
+                    } catch (e3: CfChallengeException) {
+                        lastChallengeUrl = e3.url
+                        android.util.Log.d(tag, "re-solve retry still challenged on ${e3.url} → NeedsUser")
+                        if (!awaitUserVerification(mark = e3.hardBlock)) throw e3
+                    }
+                } else {
+                    if (!awaitUserVerification()) throw e2
                 }
             } else {
                 if (!awaitUserVerification(mark = e2.hardBlock)) throw e2
@@ -202,8 +205,14 @@ class CfSession(
      * 解 cf_clearance：1px WebView 加载挑战页 → 轮询 CookieManager 出
      * cf_clearance（或挑战页翻篇成正常页）。串行（solveMutex），超时 60s。
      * [hardBlock]=true 直接返回 false（无挑战可解，省得空转）。
+     * [force]=true 跳过「已有 clearance 直接返回」的短路——用于服务端作废
+     * 旧证后的重解（调用方需先 [Wenku8Client.invalidateClearance]）。
      */
-    private suspend fun solveHidden(url: String, hardBlock: Boolean): Boolean {
+    private suspend fun solveHidden(
+        url: String,
+        hardBlock: Boolean,
+        force: Boolean = false,
+    ): Boolean {
         if (hardBlock) {
             android.util.Log.w(tag, "hardBlock（Attention Required）：跳过隐藏求解")
             return false
@@ -225,7 +234,7 @@ class CfSession(
             return false
         }
         return solveMutex.withLock {
-            if (client.hasClearance.value) return@withLock true // 排队期间已被别人解出
+            if (!force && client.hasClearance.value) return@withLock true // 排队期间已被别人解出
             _state.value = CfState.Solving
             android.util.Log.d(tag, "solveHidden start: $url")
             try {

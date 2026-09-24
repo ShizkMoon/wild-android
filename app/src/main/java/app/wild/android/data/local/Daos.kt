@@ -25,6 +25,9 @@ interface CookieDao {
     @Query("DELETE FROM cookie WHERE expiryEpochMs > 0 AND expiryEpochMs < :maxLong AND expiryEpochMs <= :nowMs")
     suspend fun deleteExpired(nowMs: Long, maxLong: Long = Long.MAX_VALUE)
 
+    @Query("DELETE FROM cookie WHERE name = 'cf_clearance'")
+    suspend fun deleteClearance()
+
     @Query("DELETE FROM cookie")
     suspend fun clearAll()
 }
